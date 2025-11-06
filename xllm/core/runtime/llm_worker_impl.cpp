@@ -23,6 +23,7 @@ limitations under the License.
 
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <utility>
 
 #include "common/device_monitor.h"
@@ -35,6 +36,9 @@ limitations under the License.
 #include "models/model_registry.h"
 #include "util/threadpool.h"
 #include "util/timer.h"
+#if defined(USE_NPU)
+#include "kernels/npu/xllm_ops/cache_select.h"
+#endif
 
 namespace xllm {
 
@@ -106,12 +110,135 @@ std::optional<ForwardOutput> LLMWorkerImpl::step(
     eplb_executor_->eplb_execute(inputs.micro_inputs[0].eplb_info);
   }
 
+  // Debug: print global KV cache and new_cache_slots shapes before forward
+  {
+    auto format_sizes = [](const c10::IntArrayRef& sizes) {
+      std::stringstream ss;
+      ss << "[";
+      for (size_t i = 0; i < sizes.size(); ++i) {
+        ss << sizes[i];
+        if (i + 1 < sizes.size()) ss << ", ";
+      }
+      ss << "]";
+      return ss.str();
+    };
+
+    bool has_inputs = !inputs.micro_inputs.empty();
+    bool is_decode = false;
+    if (!input_params_micro_batches.empty()) {
+      const auto& mip0 = input_params_micro_batches[0];
+      is_decode = (mip0.decode_seq_range.first != -1);
+    }
+    int cur_round = has_inputs ? inputs.micro_inputs[0].current_round : -1;
+    int beam_w = has_inputs ? inputs.micro_inputs[0].beam_width : -1;
+    VLOG(1) << "[KV_DEBUG] phase=" << (is_decode ? "DECODE" : "PREFILL")
+            << " current_round=" << cur_round << " beam_width=" << beam_w;
+
+    if (!kv_caches_.empty()) {
+      auto k = kv_caches_[0].get_k_cache();
+      auto v = kv_caches_[0].get_v_cache();
+      if (k.defined()) {
+        VLOG(1) << "[KV_DEBUG] global_k_cache shape: "
+                << format_sizes(k.sizes());
+      } else {
+        LOG(INFO) << "[KV_DEBUG] global_k_cache is undefined";
+      }
+      if (v.defined()) {
+        VLOG(1) << "[KV_DEBUG] global_v_cache shape: "
+                << format_sizes(v.sizes());
+      } else {
+        LOG(INFO) << "[KV_DEBUG] global_v_cache is undefined";
+      }
+    }
+
+    if (!input_params_micro_batches.empty()) {
+      const auto& mip0 = input_params_micro_batches[0];
+      if (mip0.new_cache_slots.defined()) {
+        VLOG(1) << "[KV_DEBUG] new_cache_slots shape: "
+                << format_sizes(mip0.new_cache_slots.sizes())
+                << " numel=" << mip0.new_cache_slots.numel();
+      } else {
+        LOG(INFO) << "[KV_DEBUG] new_cache_slots is undefined";
+      }
+
+      if (mip0.block_tables.defined()) {
+        VLOG(1) << "[KV_DEBUG] block_tables shape: "
+                << format_sizes(mip0.block_tables.sizes())
+                << " numel=" << mip0.block_tables.numel();
+      } else {
+        LOG(INFO) << "[KV_DEBUG] block_tables is undefined";
+      }
+    }
+  }
+
   // temporarily use [0], will be adapted in next pr
   // call model executor forward to get hidden states
+  VLOG(1) << "model_executor_->forward";
   auto hidden_states = model_executor_->forward(flatten_tokens_micro_batches,
                                                 flatten_positions_micro_batches,
                                                 kv_caches_,
                                                 input_params_micro_batches);
+  VLOG(1) << "model_executor_->forward done";
+
+  // Debug: print global KV cache and new_cache_slots shapes before forward
+  {
+    auto format_sizes = [](const c10::IntArrayRef& sizes) {
+      std::stringstream ss;
+      ss << "[";
+      for (size_t i = 0; i < sizes.size(); ++i) {
+        ss << sizes[i];
+        if (i + 1 < sizes.size()) ss << ", ";
+      }
+      ss << "]";
+      return ss.str();
+    };
+
+    bool has_inputs = !inputs.micro_inputs.empty();
+    bool is_decode = false;
+    if (!input_params_micro_batches.empty()) {
+      const auto& mip0 = input_params_micro_batches[0];
+      is_decode = (mip0.decode_seq_range.first != -1);
+    }
+    int cur_round = has_inputs ? inputs.micro_inputs[0].current_round : -1;
+    int beam_w = has_inputs ? inputs.micro_inputs[0].beam_width : -1;
+    VLOG(1) << "[KV_DEBUG] phase=" << (is_decode ? "DECODE" : "PREFILL")
+            << " current_round=" << cur_round << " beam_width=" << beam_w;
+
+    if (!kv_caches_.empty()) {
+      auto k = kv_caches_[0].get_k_cache();
+      auto v = kv_caches_[0].get_v_cache();
+      if (k.defined()) {
+        VLOG(1) << "[KV_DEBUG] global_k_cache shape: "
+                << format_sizes(k.sizes());
+      } else {
+        LOG(INFO) << "[KV_DEBUG] global_k_cache is undefined";
+      }
+      if (v.defined()) {
+        VLOG(1) << "[KV_DEBUG] global_v_cache shape: "
+                << format_sizes(v.sizes());
+      } else {
+        LOG(INFO) << "[KV_DEBUG] global_v_cache is undefined";
+      }
+    }
+
+    if (!input_params_micro_batches.empty()) {
+      const auto& mip0 = input_params_micro_batches[0];
+      if (mip0.new_cache_slots.defined()) {
+        VLOG(1) << "[KV_DEBUG] new_cache_slots shape: "
+                << format_sizes(mip0.new_cache_slots.sizes())
+                << " numel=" << mip0.new_cache_slots.numel();
+      } else {
+        LOG(INFO) << "[KV_DEBUG] new_cache_slots is undefined";
+      }
+      if (mip0.block_tables.defined()) {
+        VLOG(1) << "[KV_DEBUG] block_tables shape: "
+                << format_sizes(mip0.block_tables.sizes())
+                << " numel=" << mip0.block_tables.numel();
+      } else {
+        LOG(INFO) << "[KV_DEBUG] block_tables is undefined";
+      }
+    }
+  }
   if (!hidden_states.defined()) {
     return std::nullopt;
   }
@@ -157,14 +284,21 @@ std::optional<ForwardOutput> LLMWorkerImpl::step(
 
   // driver prepare model output
   SampleOutput sample_output;
+  VLOG(1) << "inputs acc logprob:" << inputs.acc_logprob.numel();
+  VLOG(1) << "selected token is defined:"
+          << concated_sampling_params.selected_token_idxes.defined();
   if (concated_sampling_params.selected_token_idxes.defined()) {
+    VLOG(1) << "[SEL/WORKER] sel.defined=1 numel="
+            << concated_sampling_params.selected_token_idxes.size(0);
     sample_output = sampler_->forward(logits, concated_sampling_params);
     output.logits = logits;
 
     // beam search kernel
     BeamSearchOutput beam_search_output;
+    VLOG(1) << "inputs acc logprob:" << inputs.acc_logprob.numel();
     if (concated_sampling_params.use_beam_search &&
         inputs.acc_logprob.numel() > 0) {
+      VLOG(1) << "beam search kernel";
       beam_search_output = beam_searcher_->forward(inputs.acc_logprob,
                                                    sample_output.top_tokens,
                                                    sample_output.top_logprobs);
@@ -178,6 +312,21 @@ std::optional<ForwardOutput> LLMWorkerImpl::step(
     output.max_top_logprobs = concated_sampling_params.max_top_logprobs;
     // set beam search output to output
     output.beam_search_output = beam_search_output;
+    // cache select kernel
+    // 只有在 decode stage 才需要 cache select
+
+    int32_t current_round = inputs.micro_inputs[0].current_round;
+    int32_t beam_width = inputs.micro_inputs[0].beam_width;
+    if (beam_width > 1 && current_round > 0) {
+      VLOG(1) << "cache select" << beam_width << " " << current_round;
+      xllm_ops::cache_select(beam_search_output.out_tokens,
+                             beam_search_output.group_offset,
+                             input_params_micro_batches[0].decode_k_cache,
+                             input_params_micro_batches[0].decode_v_cache,
+                             beam_width,
+                             current_round);
+      VLOG(1) << "cache_select done";
+    }
   }
 
   // if running in multi_stream_parallel step, all micro batches

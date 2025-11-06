@@ -30,15 +30,19 @@ BeamSearchOutput BeamSearcher::forward(
       torch::empty({num_seq, 1}, logprobs.options().dtype(torch::kFloat32));
   output.src_seq_idxes =
       torch::empty({num_seq, 1}, logprobs.options().dtype(torch::kInt32));
+  output.group_offset =
+      torch::empty({num_seq, 1}, logprobs.options().dtype(torch::kInt32));
   xllm_ops::beam_search(logprobs.reshape({-1, 1}),
                         top_tokens.to(torch::kInt32),
                         top_logprobs,
                         output.src_seq_idxes,
                         output.out_logprobs,
-                        output.out_tokens);
+                        output.out_tokens,
+                        output.group_offset);
   output.src_seq_idxes = output.src_seq_idxes.reshape({-1});
   output.out_logprobs = output.out_logprobs.reshape({-1});
   output.out_tokens = output.out_tokens.reshape({-1});
+  output.group_offset = output.group_offset.reshape({-1});
   return output;
 #else
   LOG(FATAL) << "BeamSearcher is only implemented for NPU backend.";

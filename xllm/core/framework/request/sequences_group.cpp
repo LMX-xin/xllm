@@ -176,6 +176,9 @@ void SequencesGroup::process_beam_search() {
   }
 
   size_t beam_width = sequence_params_.sampling_param->beam_width;
+  // VLOG(1) << "sequences_group process_beam_search";
+  // VLOG(1) << "beam_width: " << beam_width;
+  // VLOG(1) << "sequences_.size(): " << sequences_.size();
   size_t seq_size = sequences_.size();
   size_t topk = sequence_params_.sampling_param->top_logprobs;
   size_t num_candidates = topk * seq_size;

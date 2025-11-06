@@ -1,0 +1,99 @@
+/* Copyright 2025 The xLLM Authors. All Rights Reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    https://github.com/jd-opensource/xllm/blob/main/LICENSE
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#include <c10/core/Device.h>
+#include <glog/logging.h>
+#include <torch/torch.h>
+#include <torch_npu/csrc/libs/init_npu.h>
+#include <torch_npu/torch_npu.h>
+
+#include <nlohmann/json.hpp>
+#ifdef TORCH_HIGHER_THAN_PTA6
+#include <torch_npu/csrc/framework/OpCommand.h>
+#else
+#include <torch_npu/csrc/aten/NPUNativeFunctions.h>
+#include <torch_npu/csrc/framework/utils/OpPreparation.h>
+#endif
+
+#include "acl/acl.h"
+#include "aclnn_select_unshared_kv.h"
+#include "cache_select.h"
+
+#define CHECK_ACL_SUCCESS(expr, msg) \
+  do {                               \
+    auto _ret = (expr);              \
+    if (_ret != ACL_SUCCESS) {       \
+      LOG(ERROR) << msg;             \
+      throw std::runtime_error(msg); \
+    }                                \
+  } while (0)
+namespace xllm_ops {
+
+void cache_select(const torch::Tensor& beam_index,
+                  const torch::Tensor& group_offset,
+                  torch::Tensor& k_cache,
+                  torch::Tensor& v_cache,
+                  int32_t beam_width,
+                  int32_t current_round) {
+  xllm_ops_utils::check_tensor(beam_index, "beam_index", "cache_select");
+  xllm_ops_utils::check_tensor(group_offset, "group_offset", "cache_select");
+  xllm_ops_utils::check_tensor(k_cache, "k_cache", "cache_select");
+  xllm_ops_utils::check_tensor(v_cache, "v_cache", "cache_select");
+  aclTensor* beam_index_ids = nullptr;
+  aclTensor* group_offset_ids = nullptr;
+  aclTensor* k_cache_ids = nullptr;
+  aclTensor* v_cache_ids = nullptr;
+  int32_t device_id = beam_index.device().index();
+  aclrtStream stream = c10_npu::getCurrentNPUStream(device_id).stream();
+  xllm_ops_utils::create_acltensor(&beam_index_ids, beam_index);
+  xllm_ops_utils::create_acltensor(&group_offset_ids, group_offset);
+  xllm_ops_utils::create_acltensor(&k_cache_ids, k_cache);
+  xllm_ops_utils::create_acltensor(&v_cache_ids, v_cache);
+  uint64_t workspace_size = 0;
+  aclOpExecutor* executor = nullptr;
+
+  CHECK_ACL_SUCCESS(
+      aclnnSelectUnsharedKVGetWorkspaceSize(beam_index_ids,
+                                            k_cache_ids,
+                                            v_cache_ids,
+                                            group_offset_ids,
+                                            static_cast<int64_t>(current_round),
+                                            static_cast<int64_t>(beam_width),
+                                            /* out_k */ k_cache_ids,
+                                            /* out_v */ v_cache_ids,
+                                            &workspace_size,
+                                            &executor),
+      "cache_select: failed to get workspace size");
+  void* workspace_addr = nullptr;
+  if (workspace_size > 0) {
+    CHECK_ACL_SUCCESS(
+        aclrtMalloc(&workspace_addr, workspace_size, ACL_MEM_MALLOC_HUGE_FIRST),
+        "cache_select: failed to allocate workspace");
+  }
+  CHECK_ACL_SUCCESS(
+      aclnnSelectUnsharedKV(workspace_addr, workspace_size, executor, stream),
+      "cache_select: failed to perform cache select");
+  CHECK_ACL_SUCCESS(aclrtSynchronizeStream(stream),
+                    "cache_select: failed to synchronize stream");
+  aclDestroyTensor(beam_index_ids);
+  aclDestroyTensor(group_offset_ids);
+  aclDestroyTensor(k_cache_ids);
+  aclDestroyTensor(v_cache_ids);
+  if (workspace_size > 0) {
+    CHECK_ACL_SUCCESS(aclrtFree(workspace_addr),
+                      "cache_select: failed to free workspace");
+  }
+}
+}  // namespace xllm_ops

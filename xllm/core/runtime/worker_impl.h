@@ -254,6 +254,19 @@ class WorkerImpl {
   Status status_ = Status::UNINITIALIZED;
 
   torch::Tensor expert_load_data_;
+
+  // step-level decode kv cache shared within a REC step (multiple decode calls)
+  struct StepDecodeCache {
+    torch::Tensor k;
+    torch::Tensor v;
+    int64_t num_sequences = 0;
+    int32_t beam_width = 1;
+    int64_t head_num = 0;
+    int64_t head_dim = 0;
+    int64_t rounds = 0;
+    int32_t used_rounds = 0;
+  };
+  std::unordered_map<uint64_t, StepDecodeCache> step_uid_to_cache_;
 };
 
 }  // namespace xllm

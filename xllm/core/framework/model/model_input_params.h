@@ -91,6 +91,13 @@ struct ModelInputParams {
     params.new_cache_slot_offsets = safe_to(new_cache_slot_offsets, device);
     params.kv_cache_start_offsets = safe_to(kv_cache_start_offsets, device);
 
+    // decode kv cache (optional)
+    params.decode_k_cache = safe_to(decode_k_cache, device);
+    params.decode_v_cache = safe_to(decode_v_cache, device);
+    params.beam_width_tensor = safe_to(beam_width_tensor, device);
+    params.current_round_tensor = safe_to(current_round_tensor, device);
+    params.beam_width = beam_width;
+    params.current_round = current_round;
     // Copy graph_buffer to device
     params.graph_buffer = safe_to(graph_buffer, device, true);
 
@@ -193,6 +200,16 @@ struct ModelInputParams {
   // Graph execution buffer for temporary tensor storage
   // Used by ACL Graph Executor to avoid repeated memory allocation
   torch::Tensor graph_buffer;
+
+  // optional decode kv cache provided by engine for step-level decode
+  torch::Tensor decode_k_cache;
+  torch::Tensor decode_v_cache;
+  torch::Tensor beam_width_tensor;
+  torch::Tensor current_round_tensor;
+  // beam width for step-level decode
+  int32_t beam_width = 1;
+  // current round for step-level decode
+  int32_t current_round = 0;
 };
 
 }  // namespace xllm

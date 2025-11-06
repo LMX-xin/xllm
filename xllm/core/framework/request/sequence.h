@@ -257,6 +257,10 @@ class Sequence final {
     return sequence_params_.sampling_param->beam_width > 1;
   }
 
+  // mark whether we are in engine's step-level decode rounds
+  void set_in_step_decode_round(bool v) { in_step_decode_round_ = v; }
+  bool in_step_decode_round() const { return in_step_decode_round_; }
+
   LogprobState* logprob_state() { return logprob_state_.get(); }
 
   // set sequence id
@@ -356,6 +360,9 @@ class Sequence final {
 
   // kvcache store copy async result
   std::optional<std::vector<folly::SemiFuture<uint32_t>>> futures_;
+
+  // engine REC 内部 decode 轮次标志
+  bool in_step_decode_round_ = false;
 };
 
 }  // namespace xllm

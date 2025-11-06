@@ -450,6 +450,63 @@ void WorkerImpl::prepare_work_before_execute(
       }
     }
 #endif
+
+#if defined(USE_NPU)
+    // step-level decode shared cache: allocate/attach by step_uid metadata
+    {
+      bool is_prefill = fwd_inputs_on_device.input_params.global_empty_kv_cache
+                            ? true
+                            : false;
+      // VLOG(1) << "worker impl is_prefill: " << is_prefill;
+      if (!is_prefill) {
+        auto& mip = fwd_inputs_on_device.input_params;
+        uint64_t step_uid = fwd_inputs_on_device.step_uid;
+        int32_t beam_width = fwd_inputs_on_device.beam_width;
+        int32_t current_round = fwd_inputs_on_device.current_round;
+        const auto& shape = fwd_inputs_on_device.decode_kv_shape;
+        // allocate step-level shared decode kv cache if not exists
+        if (!(mip.decode_k_cache.defined() && mip.decode_v_cache.defined()) &&
+            step_uid != 0 && shape.size() == 4) {
+          int64_t num_sequences = shape[0];
+          int64_t head_num = shape[1];
+          int64_t step_rounds = shape[2];
+          int64_t head_dim = shape[3];
+          auto it = step_uid_to_cache_.find(step_uid);
+          if (it == step_uid_to_cache_.end()) {
+            StepDecodeCache cache;
+            auto fp_options =
+                torch::TensorOptions().dtype(dtype_).device(device_);
+            cache.k = torch::zeros(
+                {num_sequences, head_num, step_rounds, head_dim}, fp_options);
+            cache.v = torch::zeros(
+                {num_sequences, head_num, step_rounds, head_dim}, fp_options);
+            cache.num_sequences = num_sequences;
+            cache.head_num = head_num;
+            cache.head_dim = head_dim;
+            cache.rounds = step_rounds;
+            cache.used_rounds = 0;
+            it = step_uid_to_cache_.emplace(step_uid, std::move(cache)).first;
+          }
+          // bind to input params
+          mip.decode_k_cache = it->second.k;
+          mip.decode_v_cache = it->second.v;
+          // update used_rounds, and cleanup if completed
+          it->second.used_rounds++;
+          if (it->second.used_rounds >= it->second.rounds) {
+            step_uid_to_cache_.erase(step_uid);
+          }
+        }
+        // always refresh scalar metadata tensors (int32 on device)
+        {
+          auto int_options =
+              torch::TensorOptions().dtype(torch::kInt32).device(device_);
+          mip.beam_width_tensor = torch::tensor({beam_width}, int_options);
+          mip.current_round_tensor =
+              torch::tensor({current_round}, int_options);
+        }
+      }
+    }
+#endif
     processed_inputs.micro_inputs.push_back(std::move(fwd_inputs_on_device));
   }
   processed_inputs.concated_sampling_params =

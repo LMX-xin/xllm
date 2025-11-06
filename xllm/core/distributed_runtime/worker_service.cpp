@@ -345,6 +345,20 @@ void WorkerService::ExecuteModel(
       batched_fwd_inputs.concated_sampling_params.concat(
           batched_fwd_inputs.micro_inputs[i].sampling_params);
     }
+    // Debug (silenced by default)
+    // for (auto i = 0; i < micro_batches_num; ++i) {
+    //   const auto &sp = batched_fwd_inputs.micro_inputs[i].sampling_params;
+    //   VLOG(1) << "[SEL/MICRO] i=" << i
+    //           << " defined=" << sp.selected_token_idxes.defined()
+    //           << " numel="
+    //           << (sp.selected_token_idxes.defined() ?
+    //           sp.selected_token_idxes.size(0)
+    //                                                : -1);
+    // }
+    // auto conc =
+    // batched_fwd_inputs.concated_sampling_params.selected_token_idxes; VLOG(1)
+    // << "[SEL/CONCAT] defined=" << conc.defined() << " numel="
+    //         << (conc.defined() ? conc.size(0) : -1);
 
     // concat acc_logprob here for beam search together
     if (micro_batches_num > 1) {

@@ -193,6 +193,13 @@ message ForwardInput {
   repeated int64 kv_cache_start_offsets = 36;
   // beam search kernel
   repeated float acc_logprob_vec = 37;
+
+  // step-level decode metadata (scheme A)
+  uint64 step_uid = 38;
+  int32 beam_width = 39;
+  int32 current_round = 40;
+  // decode kv cache shape planned by engine: [num_sequences, n_kv_heads, step_rounds, head_dim]
+  repeated int64 decode_kv_shape = 41;
 }
 
  message BatchedForwardInputs {

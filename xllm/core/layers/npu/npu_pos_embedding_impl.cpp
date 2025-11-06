@@ -73,6 +73,8 @@ torch::Tensor NpuRotaryEmbeddingImpl::forward(const torch::Tensor& cos_sin_pos,
                                               const torch::Tensor& position,
                                               int nodeId) {
   atb::Status st;
+  // VLOG(1) << "position shape: " << position.sizes() << " cos_sin_pos shape: "
+  // << cos_sin_pos.sizes();
   build_node_variant_pack(embedding_node_, cos_sin_pos, position);
   st = execute_node(embedding_node_, nodeId);
   LOG_IF(FATAL, st != 0) << modelName_

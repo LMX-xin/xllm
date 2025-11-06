@@ -27,6 +27,7 @@ struct BeamSearchOutput {
   torch::Tensor src_seq_idxes;  // [num_seq]
   torch::Tensor out_tokens;     // [num_seq]
   torch::Tensor out_logprobs;   // [num_seq]
+  torch::Tensor group_offset;   // [num_seq]
 };
 
 class BeamSearcher {

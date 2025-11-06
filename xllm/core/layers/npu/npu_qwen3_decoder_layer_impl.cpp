@@ -187,6 +187,7 @@ void NpuQwen3DecoderLayerImpl::param_from_args(
   param.rmsnormQKNorm = true;
   param.isPrefill = isPrefill;
   param.isBF16 = args.dtype() == "bfloat16";
+  param.isEnableDecodeKvCache = !(isPrefill);
   param.enableSplitFuse = FLAGS_enable_chunked_prefill && isPrefill;
   param.loraEnableGMM = false;
 
@@ -552,8 +553,17 @@ void NpuQwen3DecoderLayerImpl::build_node_variant_pack(
   node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 8) = placeholder_;
   node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 9) =
       atb_speed::Utils::AtTensor2Tensor(input_params[0].block_tables);
-  node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 10) =
-      atb_speed::Utils::AtTensor2Tensor(input_params[0].new_cache_slots);
+  // LOG(INFO) << "is prefill :" << is_prefill;
+  if ((!is_prefill)) {
+    // LOG(INFO)<<"new cache slots offset" << WEIGHT_COUNT_PER_LAYER + 10;
+    node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 10) = placeholder_;
+  } else {
+    // LOG(INFO) << "prefill new cache slots offset :" << WEIGHT_COUNT_PER_LAYER
+    // + 10;
+    node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 10) =
+        atb_speed::Utils::AtTensor2Tensor(input_params[0].new_cache_slots);
+  }
+
   if (!FLAGS_enable_multi_stream_parallel) {
     if (is_prefill &&
         (FLAGS_enable_chunked_prefill || FLAGS_enable_prefix_cache)) {
@@ -633,6 +643,19 @@ void NpuQwen3DecoderLayerImpl::build_node_variant_pack(
             input_params[1].q_seq_lens_vec.data();
       }
     }
+  }
+
+  // If in decode path and engine provided step-level decode kv cache, bind them
+  if (!is_prefill) {
+    // LOG(INFO) << "decode k cache offset :" << WEIGHT_COUNT_PER_LAYER + 11;
+    node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 11) =
+        atb_speed::Utils::AtTensor2Tensor(input_params[0].decode_k_cache);
+    node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 12) =
+        atb_speed::Utils::AtTensor2Tensor(input_params[0].decode_v_cache);
+    node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 13) =
+        atb_speed::Utils::AtTensor2Tensor(input_params[0].beam_width_tensor);
+    node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 14) =
+        atb_speed::Utils::AtTensor2Tensor(input_params[0].current_round_tensor);
   }
 
   for (size_t i = 0; i < WEIGHT_COUNT_PER_LAYER; ++i) {

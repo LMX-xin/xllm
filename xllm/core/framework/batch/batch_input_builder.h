@@ -117,7 +117,8 @@ class BatchInputBuilder {
   void extract_tokens_and_positions(Sequence* sequence,
                                     uint32_t n_kv_cache_tokens,
                                     uint32_t seq_len,
-                                    BuilderState* state_ptr = nullptr);
+                                    BuilderState* state_ptr = nullptr,
+                                    bool in_beam_decode = false);
   void handle_sampling_parameters(
       Sequence* sequence,
       uint32_t token_position,

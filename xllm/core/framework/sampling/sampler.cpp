@@ -27,6 +27,12 @@ namespace xllm {
 SampleOutput Sampler::forward(torch::Tensor& logits,
                               const SamplingParameters& params) const {
   SampleOutput output;
+  VLOG(1) << "[SEL/SAMPLER] sel.num="
+          << (params.selected_token_idxes.defined()
+                  ? params.selected_token_idxes.numel()
+                  : -1)
+          << " sample.num="
+          << (params.sample_idxes.defined() ? params.sample_idxes.numel() : -1);
   // apply frequency and presence penalties
   if (params.frequency_penalties.defined()) {
     apply_frequency_presence_penalties(logits,

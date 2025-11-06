@@ -97,6 +97,11 @@ struct ForwardInput {
     inputs.transfer_kv_infos = transfer_kv_infos;
     inputs.eplb_info = eplb_info;
     inputs.acc_logprob = safe_to(acc_logprob, device, true);
+    // step-level metadata (non-tensor)
+    inputs.step_uid = step_uid;
+    inputs.beam_width = beam_width;
+    inputs.current_round = current_round;
+    inputs.decode_kv_shape = decode_kv_shape;
     return inputs;
   }
   // flatten token ids
@@ -110,6 +115,13 @@ struct ForwardInput {
   EplbInfo eplb_info;
   // beam search kernel input
   torch::Tensor acc_logprob;
+  // step-level decode metadata (scheme A)
+  uint64_t step_uid = 0;  // engine-wide unique id for this REC step
+  int32_t beam_width = 1;
+  int32_t current_round = 0;
+  // decode kv cache shape planned by engine: [batch_size * beam_width,
+  // n_kv_heads, step_rounds, head_dim]
+  std::vector<int64_t> decode_kv_shape;
 };
 
 // output after forward execution
@@ -180,6 +192,13 @@ struct RawForwardInput {
   std::vector<int64_t> kv_cache_start_offsets;  //[n_seq]
   // beam search kernel input
   std::vector<float> acc_logprob_vec;
+  // step-level decode metadata (scheme A)
+  uint64_t step_uid = 0;  // engine-wide unique id for this REC step
+  int32_t beam_width = 1;
+  int32_t current_round = 0;
+  // decode kv cache shape planned by engine: [batch_size * beam_width,
+  // n_kv_heads, step_rounds, head_dim]
+  std::vector<int64_t> decode_kv_shape;
 };
 
 struct RawSampleOutput {

@@ -20,16 +20,15 @@ limitations under the License.
 #include <vector>
 
 #include "acl/acl.h"
-#include "aclnn_beam_search_group.h"
+#include "aclnn_select_unshared_kv.h"
 #include "acltensor_utils.h"
 #include "util/tensor_helper.h"
 
 namespace xllm_ops {
-void beam_search(const torch::Tensor& logprobs,
-                 const torch::Tensor& top_tokens,
-                 const torch::Tensor& top_logprobs,
-                 torch::Tensor& src_seq_idxes,
-                 torch::Tensor& out_logprobs,
-                 torch::Tensor& out_token_ids,
-                 torch::Tensor& group_offset);
+void cache_select(const torch::Tensor& beam_index,
+                  const torch::Tensor& group_offset,
+                  torch::Tensor& k_cache,
+                  torch::Tensor& v_cache,
+                  int32_t beam_width,
+                  int32_t current_round);
 }  // namespace xllm_ops
