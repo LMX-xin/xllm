@@ -95,7 +95,12 @@ LLMMaster::LLMMaster(const Options& options)
       .enable_forward_interruption(options_.enable_forward_interruption())
       .max_global_ttft_ms(options_.max_global_ttft_ms())
       .max_global_tpot_ms(options_.max_global_tpot_ms());
-  scheduler_ = create_continuous_scheduler(engine_.get(), scheduler_options);
+  if (FLAGS_max_decode_rounds > 0) {
+    scheduler_ = create_fixsteps_scheduler(engine_.get(), scheduler_options);
+  } else {
+    scheduler_ = create_continuous_scheduler(engine_.get(), scheduler_options);
+  }
+
 
   if (options_.enable_service_routing()) {
     auto& instance_info = scheduler_->get_instance_info();
