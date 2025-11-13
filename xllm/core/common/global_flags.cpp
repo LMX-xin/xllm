@@ -379,7 +379,14 @@ DEFINE_int64(buffer_size_per_seq,
              0,
              "Buffer size per sequence in bytes, default 0.");
 
+DEFINE_int64(max_token_per_req, 1024, "Max token per request, default 0.");
+
 // --- beam search config ---
 DEFINE_bool(enable_beam_search_kernel,
             false,
             "Whether to enable beam search kernel.");
+
+// --- multi-step decode config ---
+DEFINE_int32(max_decode_rounds,
+             0,
+             "Maximum number of decode rounds for multi-step decoding. 0 means disabled.");

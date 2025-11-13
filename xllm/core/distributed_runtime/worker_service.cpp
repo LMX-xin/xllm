@@ -345,6 +345,46 @@ void WorkerService::ExecuteModel(
       batched_fwd_inputs.concated_sampling_params.concat(
           batched_fwd_inputs.micro_inputs[i].sampling_params);
     }
+
+    bool has_decoder_sampling = false;
+    for (auto i = 0; i < micro_batches_num; ++i) {
+      has_decoder_sampling =
+          has_decoder_sampling ||
+          batched_fwd_inputs.micro_inputs[i]
+              .decoder_sampling_params.selected_token_idxes.defined();
+    }
+    if (has_decoder_sampling) {
+      batched_fwd_inputs.concated_decoder_sampling_params =
+          batched_fwd_inputs.micro_inputs[0].decoder_sampling_params;
+      for (auto i = 1; i < micro_batches_num; ++i) {
+        batched_fwd_inputs.concated_decoder_sampling_params.concat(
+            batched_fwd_inputs.micro_inputs[i].decoder_sampling_params);
+      }
+    }
+
+    // construct beam batch-level tensors based on total batch size
+    int32_t total_num_sequences = 0;
+    for (auto& input : batched_fwd_inputs.micro_inputs) {
+      total_num_sequences += input.input_params.num_sequences;
+    }
+    int32_t beam_width = batched_fwd_inputs.micro_inputs.empty()
+                             ? 1
+                             : batched_fwd_inputs.micro_inputs[0].beam_width;
+    int32_t total_round = batched_fwd_inputs.micro_inputs.empty()
+                              ? 0
+                              : batched_fwd_inputs.micro_inputs[0].total_round;
+    auto int_options =
+        torch::TensorOptions().dtype(torch::kInt32).device(torch::kCPU);
+    int64_t beam_sequences =
+        static_cast<int64_t>(total_num_sequences) * beam_width;
+    batched_fwd_inputs.beam_sequence_group =
+        torch::zeros({beam_sequences, total_round}, int_options);
+    batched_fwd_inputs.beam_token_ids =
+        torch::zeros({beam_sequences, 1}, int_options);
+    batched_fwd_inputs.beam_token_index =
+        torch::zeros({beam_sequences, 1}, int_options);
+    batched_fwd_inputs.beam_group_offset =
+        torch::zeros({beam_sequences, 1}, int_options);
     // Debug (silenced by default)
     // for (auto i = 0; i < micro_batches_num; ++i) {
     //   const auto &sp = batched_fwd_inputs.micro_inputs[i].sampling_params;
@@ -372,6 +412,40 @@ void WorkerService::ExecuteModel(
     } else {
       batched_fwd_inputs.acc_logprob =
           batched_fwd_inputs.micro_inputs[0].acc_logprob;
+    }
+
+    {
+      int64_t global_max_blocks = 0;
+      for (auto i = 0; i < micro_batches_num; ++i) {
+        const auto& bt =
+            batched_fwd_inputs.micro_inputs[i].input_params.block_tables;
+        if (bt.defined() && bt.dim() == 2) {
+          global_max_blocks = std::max(global_max_blocks, bt.size(1));
+        }
+      }
+      auto int_options =
+          torch::TensorOptions().dtype(torch::kInt32).device(torch::kCPU);
+      std::vector<torch::Tensor> blocks_list;
+      blocks_list.reserve(micro_batches_num);
+      for (auto i = 0; i < micro_batches_num; ++i) {
+        auto bt = batched_fwd_inputs.micro_inputs[i].input_params.block_tables;
+        if (bt.defined() && bt.dim() == 2) {
+          auto curr_cols = bt.size(1);
+          if (curr_cols < global_max_blocks) {
+            // actually this will never happen, because blocksize is ok.
+            auto pad = torch::zeros({bt.size(0), global_max_blocks - curr_cols},
+                                    int_options);
+            bt = torch::cat({bt.to(torch::kInt32), pad}, /*dim=*/1);
+          } else {
+            bt = bt.to(torch::kInt32);
+          }
+          blocks_list.push_back(bt);
+        }
+      }
+      if (!blocks_list.empty()) {
+        batched_fwd_inputs.concated_block_tables =
+            torch::cat(blocks_list, /*dim=*/0);
+      }
     }
 
     // model output

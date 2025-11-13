@@ -146,7 +146,7 @@ message BlockPair {
   int32 host_block_id = 2;
 }
 
-message ForwardInput {
+  message ForwardInput {
   // flatten the token ids and positions
   repeated int32 flatten_tokens_vec = 1;
   repeated int32 flatten_positions_vec = 2;
@@ -195,11 +195,21 @@ message ForwardInput {
   repeated float acc_logprob_vec = 37;
 
   // step-level decode metadata (scheme A)
-  uint64 step_uid = 38;
   int32 beam_width = 39;
   int32 current_round = 40;
-  // decode kv cache shape planned by engine: [num_sequences, n_kv_heads, step_rounds, head_dim]
+  // decode kv cache shape planned by engine: [batch_size * max_token_per_req, n_kv_heads, head_dim]
   repeated int64 decode_kv_shape = 41;
+    int32 total_round = 48;
+    repeated int32  decode_seq_lens = 49;
+    repeated int32  decode_q_seq_lens = 50;
+
+  // optional decode-only sampling meta
+  repeated RequestSamplingParam decode_sampling_params = 42;
+  repeated int32 decode_selected_token_idxes = 43;
+  repeated int32 decode_sample_idxes = 44;
+  repeated UniqueTokenIds decode_unique_token_ids_vec = 45;
+  repeated UniqueTokenCounts decode_unique_token_counts_vec = 46;
+  repeated int32 decode_unique_token_lens_vec = 47;
 }
 
  message BatchedForwardInputs {

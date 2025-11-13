@@ -94,13 +94,14 @@ struct ForwardInput {
     inputs.positions = safe_to(positions, device, true);
     inputs.input_params = input_params.to(device);
     inputs.sampling_params = sampling_params.to(device, dtype);
+    inputs.decoder_sampling_params = decoder_sampling_params.to(device, dtype);
     inputs.transfer_kv_infos = transfer_kv_infos;
     inputs.eplb_info = eplb_info;
     inputs.acc_logprob = safe_to(acc_logprob, device, true);
     // step-level metadata (non-tensor)
-    inputs.step_uid = step_uid;
     inputs.beam_width = beam_width;
     inputs.current_round = current_round;
+    inputs.total_round = total_round;
     inputs.decode_kv_shape = decode_kv_shape;
     return inputs;
   }
@@ -110,15 +111,16 @@ struct ForwardInput {
   torch::Tensor positions;
   ModelInputParams input_params;
   SamplingParameters sampling_params;
+  SamplingParameters decoder_sampling_params;
   // kv info for disaggregated prefill/decode
   std::vector<TransferKVInfo> transfer_kv_infos;
   EplbInfo eplb_info;
   // beam search kernel input
   torch::Tensor acc_logprob;
   // step-level decode metadata (scheme A)
-  uint64_t step_uid = 0;  // engine-wide unique id for this REC step
   int32_t beam_width = 1;
   int32_t current_round = 0;
+  int32_t total_round = 0;
   // decode kv cache shape planned by engine: [batch_size * beam_width,
   // n_kv_heads, step_rounds, head_dim]
   std::vector<int64_t> decode_kv_shape;
@@ -156,12 +158,20 @@ struct RawForwardInput {
   std::vector<std::vector<int64_t>> unique_token_ids_vec;
   std::vector<std::vector<int32_t>> unique_token_counts_vec;
   std::vector<int32_t> unique_token_lens_vec;
+  std::vector<const RequestSamplingParam*> decode_sampling_params;
+  std::vector<int32_t> decode_selected_token_idxes;
+  std::vector<int32_t> decode_sample_idxes;
+  std::vector<std::vector<int64_t>> decode_unique_token_ids_vec;
+  std::vector<std::vector<int32_t>> decode_unique_token_counts_vec;
+  std::vector<int32_t> decode_unique_token_lens_vec;
   bool empty_kv_cache = true;
   bool global_empty_kv_cache = true;
   uint32_t max_seq_len;
   uint32_t q_max_seq_len;
   std::vector<int32_t> seq_lens;
   std::vector<int32_t> q_seq_lens;
+  std::vector<int32_t> decode_seq_lens;
+  std::vector<int32_t> decode_q_seq_lens;
   std::vector<int32_t> new_token_slot_ids;
   std::vector<std::vector<int32_t>> block_tables_vec;
   int32_t num_sequences;
@@ -193,9 +203,9 @@ struct RawForwardInput {
   // beam search kernel input
   std::vector<float> acc_logprob_vec;
   // step-level decode metadata (scheme A)
-  uint64_t step_uid = 0;  // engine-wide unique id for this REC step
   int32_t beam_width = 1;
   int32_t current_round = 0;
+  int32_t total_round = 0;
   // decode kv cache shape planned by engine: [batch_size * beam_width,
   // n_kv_heads, step_rounds, head_dim]
   std::vector<int64_t> decode_kv_shape;
@@ -218,8 +228,19 @@ struct RawForwardOutput {
 struct BatchedForwardInputs {
   std::vector<ForwardInput> micro_inputs;
   SamplingParameters concated_sampling_params;
+  SamplingParameters concated_decoder_sampling_params;
   // beam search kernel input
   torch::Tensor acc_logprob;
+  torch::Tensor concated_block_tables;
+  // beam search batch-level tensors
+  // IntTensor: [batch_size * beam_width, total_round]
+  torch::Tensor beam_sequence_group;
+  // IntTensor: [batch_size * beam_width, 1]
+  torch::Tensor beam_token_ids;
+  // IntTensor: [batch_size * beam_width, 1]
+  torch::Tensor beam_token_index;
+  // IntTensor: [batch_size * beam_width, 1]
+  torch::Tensor beam_group_offset;
 };
 
 }  // namespace xllm

@@ -13,8 +13,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "fixsteps_scheduler.h"
-
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
 #include <folly/MPMCQueue.h>
@@ -26,6 +24,7 @@ limitations under the License.
 #include <memory>
 
 #include "common/metrics.h"
+#include "fixsteps_scheduler.h"
 #include "framework/batch/batch.h"
 #include "framework/batch/batch_factory.h"
 #include "framework/request/request.h"
@@ -76,7 +75,7 @@ void FixStepsScheduler::handle_prefill_requests(
              FLAGS_prefill_scheduling_memory_usage_threshold) {
     std::shared_ptr<Request> request(waiting_priority_queue_.top());
     if (request->finished() || request->cancelled()) {
-      // kv_cache_manager_->deallocate(request.get());
+      kv_cache_manager_->deallocate(request.get());
       //  release the ownership of the request
       finished_requests.emplace_back(request);
       // remove the request from the priority queue
@@ -111,6 +110,14 @@ void FixStepsScheduler::handle_prefill_requests(
         can_schedule = false;
         budget_exhausted = true;
         break;
+      }
+      if (!kv_cache_manager_->allocate(prefill_sequence.get())) {
+        can_schedule = false;
+        if (!can_schedule) {
+          kv_cache_manager_->deallocate(prefill_sequence.get());
+          blocks_exhausted = true;
+          break;
+        }
       }
 
       prefill_sequences_budget.emplace_back(num_tokens);
@@ -192,7 +199,7 @@ std::vector<Batch> FixStepsScheduler::prepare_batch() {
     std::shared_ptr<Request> request = *it;
     request->update_connection_status();
     if (request->finished() || request->cancelled()) {
-      // kv_cache_manager_->deallocate(request.get());
+      kv_cache_manager_->deallocate(request.get());
       // release the ownership of the request
       finished_requests.emplace_back(request);
       // finished request is set to nullptr

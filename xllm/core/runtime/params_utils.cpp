@@ -63,6 +63,12 @@ void proto_to_forward_input(const proto::ForwardInput* pb_forward_input,
   std::vector<int32_t> q_seq_lens =
       std::vector<int32_t>(pb_forward_input->q_seq_lens().begin(),
                            pb_forward_input->q_seq_lens().end());
+  std::vector<int32_t> decode_seq_lens =
+      std::vector<int32_t>(pb_forward_input->decode_seq_lens().begin(),
+                           pb_forward_input->decode_seq_lens().end());
+  std::vector<int32_t> decode_q_seq_lens =
+      std::vector<int32_t>(pb_forward_input->decode_q_seq_lens().begin(),
+                           pb_forward_input->decode_q_seq_lens().end());
   // aprint<int32_t>(q_seq_lens, "q_seq_lens", global_rank_);
   std::vector<std::vector<int32_t>> block_tables_vec;
   for (size_t i = 0; i < pb_forward_input->block_tables_vec().size(); ++i) {
@@ -179,6 +185,60 @@ void proto_to_forward_input(const proto::ForwardInput* pb_forward_input,
     sampling_params.emplace_back(&tmp_sampling_params[i]);
   }
 
+  std::vector<const RequestSamplingParam*> decode_sampling_params;
+  std::vector<RequestSamplingParam> tmp_decode_sampling_params;
+  for (auto sp : pb_forward_input->decode_sampling_params()) {
+    RequestSamplingParam tmp;
+    tmp.frequency_penalty = sp.frequency_penalty();
+    tmp.presence_penalty = sp.presence_penalty();
+    tmp.repetition_penalty = sp.repetition_penalty();
+    tmp.temperature = sp.temperature();
+    tmp.top_p = sp.top_p();
+    tmp.top_k = sp.top_k();
+    tmp.logprobs = sp.logprobs();
+    tmp.top_logprobs = sp.top_logprobs();
+    tmp.do_sample = sp.do_sample();
+    tmp.is_embeddings = sp.is_embeddings();
+    tmp.beam_width = sp.beam_width();
+    tmp_decode_sampling_params.emplace_back(tmp);
+  }
+  for (size_t i = 0; i < tmp_decode_sampling_params.size(); ++i) {
+    decode_sampling_params.emplace_back(&tmp_decode_sampling_params[i]);
+  }
+
+  std::vector<int32_t> decode_selected_token_idxes = std::vector<int32_t>(
+      pb_forward_input->decode_selected_token_idxes().begin(),
+      pb_forward_input->decode_selected_token_idxes().end());
+  std::vector<int32_t> decode_sample_idxes =
+      std::vector<int32_t>(pb_forward_input->decode_sample_idxes().begin(),
+                           pb_forward_input->decode_sample_idxes().end());
+  std::vector<std::vector<int64_t>> decode_unique_token_ids_vec;
+  for (size_t i = 0; i < pb_forward_input->decode_unique_token_ids_vec().size();
+       ++i) {
+    decode_unique_token_ids_vec.emplace_back(
+        std::vector<int64_t>(pb_forward_input->decode_unique_token_ids_vec()[i]
+                                 .unique_token_ids()
+                                 .begin(),
+                             pb_forward_input->decode_unique_token_ids_vec()[i]
+                                 .unique_token_ids()
+                                 .end()));
+  }
+  std::vector<std::vector<int32_t>> decode_unique_token_counts_vec;
+  for (size_t i = 0;
+       i < pb_forward_input->decode_unique_token_counts_vec().size();
+       ++i) {
+    decode_unique_token_counts_vec.emplace_back(std::vector<int32_t>(
+        pb_forward_input->decode_unique_token_counts_vec()[i]
+            .unique_token_counts()
+            .begin(),
+        pb_forward_input->decode_unique_token_counts_vec()[i]
+            .unique_token_counts()
+            .end()));
+  }
+  std::vector<int32_t> decode_unique_token_lens_vec = std::vector<int32_t>(
+      pb_forward_input->decode_unique_token_lens_vec().begin(),
+      pb_forward_input->decode_unique_token_lens_vec().end());
+
   std::vector<int32_t> dp_global_token_nums =
       std::vector<int32_t>(pb_forward_input->dp_global_token_nums().begin(),
                            pb_forward_input->dp_global_token_nums().end());
@@ -255,6 +315,14 @@ void proto_to_forward_input(const proto::ForwardInput* pb_forward_input,
   input_params.q_seq_lens = torch::tensor(q_seq_lens, tensor_options);
   input_params.kv_seq_lens_vec = std::move(seq_lens);
   input_params.q_seq_lens_vec = std::move(q_seq_lens);
+  if (!decode_seq_lens.empty())
+    input_params.decode_kv_seq_lens =
+        torch::tensor(decode_seq_lens, tensor_options);
+  if (!decode_q_seq_lens.empty())
+    input_params.decode_q_seq_lens =
+        torch::tensor(decode_q_seq_lens, tensor_options);
+  input_params.decode_kv_seq_lens_vec = std::move(decode_seq_lens);
+  input_params.decode_q_seq_lens_vec = std::move(decode_q_seq_lens);
 
   input_params.new_cache_slots =
       torch::tensor(new_token_slot_ids, tensor_options);
@@ -304,11 +372,20 @@ void proto_to_forward_input(const proto::ForwardInput* pb_forward_input,
                                         unique_token_ids_vec,
                                         unique_token_counts_vec,
                                         unique_token_lens_vec);
-    if (forward_inputs.sampling_params.selected_token_idxes.defined()) {
-      // VLOG(1) << "[SEL/INIT/WORKER] tensor.numel="
-      //           <<
-      //           forward_inputs.sampling_params.selected_token_idxes.size(0);
-    }
+  }
+
+  if (!decode_selected_token_idxes.empty()) {
+    CHECK_EQ(decode_sampling_params.size(), decode_selected_token_idxes.size());
+    auto ids_src_c = decode_unique_token_ids_vec;
+    auto cnt_src_c = decode_unique_token_counts_vec;
+    util::pad_2d_vector<int64_t>(ids_src_c, /*pad_value=*/0);
+    util::pad_2d_vector(cnt_src_c, /*pad_value=*/0);
+    forward_inputs.decoder_sampling_params.init(decode_sampling_params,
+                                                decode_selected_token_idxes,
+                                                decode_sample_idxes,
+                                                ids_src_c,
+                                                cnt_src_c,
+                                                decode_unique_token_lens_vec);
   }
 
   forward_inputs.transfer_kv_infos.reserve(
@@ -385,9 +462,9 @@ void proto_to_forward_input(const proto::ForwardInput* pb_forward_input,
   eplb_info.update_layer_id = pb_forward_input->eplb_info().update_layer_id();
 
   // step-level decode metadata (scheme A)
-  forward_inputs.step_uid = pb_forward_input->step_uid();
   forward_inputs.beam_width = pb_forward_input->beam_width();
   forward_inputs.current_round = pb_forward_input->current_round();
+  forward_inputs.total_round = pb_forward_input->total_round();
   forward_inputs.decode_kv_shape =
       std::vector<int64_t>(pb_forward_input->decode_kv_shape().begin(),
                            pb_forward_input->decode_kv_shape().end());
@@ -445,6 +522,52 @@ void forward_input_to_proto(const RawForwardInput& inputs,
   }
   ADD_VECTOR_TO_PROTO(pb_forward_input->mutable_unique_token_lens_vec(),
                       inputs.unique_token_lens_vec);
+
+  // optional decode-only sampling meta
+  {
+    std::vector<proto::RequestSamplingParam> pb_decode_sampling_params;
+    for (auto sp : inputs.decode_sampling_params) {
+      proto::RequestSamplingParam pb_sp;
+      pb_sp.set_frequency_penalty(sp->frequency_penalty);
+      pb_sp.set_presence_penalty(sp->presence_penalty);
+      pb_sp.set_repetition_penalty(sp->repetition_penalty);
+      pb_sp.set_temperature(sp->temperature);
+      pb_sp.set_top_p(sp->top_p);
+      pb_sp.set_top_k(sp->top_k);
+      pb_sp.set_logprobs(sp->logprobs);
+      pb_sp.set_top_logprobs(sp->top_logprobs);
+      pb_sp.set_do_sample(sp->do_sample);
+      pb_sp.set_is_embeddings(sp->is_embeddings);
+      pb_sp.set_beam_width(sp->beam_width);
+      pb_decode_sampling_params.emplace_back(pb_sp);
+    }
+    ADD_VECTOR_TO_PROTO(pb_forward_input->mutable_decode_sampling_params(),
+                        pb_decode_sampling_params);
+    ADD_VECTOR_TO_PROTO(pb_forward_input->mutable_decode_selected_token_idxes(),
+                        inputs.decode_selected_token_idxes);
+    ADD_VECTOR_TO_PROTO(pb_forward_input->mutable_decode_sample_idxes(),
+                        inputs.decode_sample_idxes);
+    pb_forward_input->mutable_decode_unique_token_ids_vec()->Reserve(
+        inputs.decode_unique_token_ids_vec.size());
+    for (auto ids : inputs.decode_unique_token_ids_vec) {
+      proto::UniqueTokenIds pb_unique_token_ids;
+      ADD_VECTOR_TO_PROTO(pb_unique_token_ids.mutable_unique_token_ids(), ids);
+      *pb_forward_input->mutable_decode_unique_token_ids_vec()->Add() =
+          pb_unique_token_ids;
+    }
+    pb_forward_input->mutable_decode_unique_token_counts_vec()->Reserve(
+        inputs.decode_unique_token_counts_vec.size());
+    for (auto counts : inputs.decode_unique_token_counts_vec) {
+      proto::UniqueTokenCounts pb_unique_token_counts;
+      ADD_VECTOR_TO_PROTO(pb_unique_token_counts.mutable_unique_token_counts(),
+                          counts);
+      *pb_forward_input->mutable_decode_unique_token_counts_vec()->Add() =
+          pb_unique_token_counts;
+    }
+    ADD_VECTOR_TO_PROTO(
+        pb_forward_input->mutable_decode_unique_token_lens_vec(),
+        inputs.decode_unique_token_lens_vec);
+  }
   pb_forward_input->set_empty_kv_cache(inputs.empty_kv_cache);
   pb_forward_input->set_global_empty_kv_cache(inputs.global_empty_kv_cache);
   pb_forward_input->set_max_seq_len(inputs.max_seq_len);
@@ -452,6 +575,10 @@ void forward_input_to_proto(const RawForwardInput& inputs,
   ADD_VECTOR_TO_PROTO(pb_forward_input->mutable_seq_lens(), inputs.seq_lens);
   ADD_VECTOR_TO_PROTO(pb_forward_input->mutable_q_seq_lens(),
                       inputs.q_seq_lens);
+  ADD_VECTOR_TO_PROTO(pb_forward_input->mutable_decode_seq_lens(),
+                      inputs.decode_seq_lens);
+  ADD_VECTOR_TO_PROTO(pb_forward_input->mutable_decode_q_seq_lens(),
+                      inputs.decode_q_seq_lens);
   ADD_VECTOR_TO_PROTO(pb_forward_input->mutable_new_token_slot_ids(),
                       inputs.new_token_slot_ids);
   pb_forward_input->mutable_block_tables_vec()->Reserve(
@@ -561,9 +688,10 @@ void forward_input_to_proto(const RawForwardInput& inputs,
   ADD_VECTOR_TO_PROTO(pb_forward_input->mutable_cum_sum(), inputs.cum_sum);
 
   // step-level decode metadata (scheme A)
-  pb_forward_input->set_step_uid(inputs.step_uid);
+  // step_uid removed
   pb_forward_input->set_beam_width(inputs.beam_width);
   pb_forward_input->set_current_round(inputs.current_round);
+  pb_forward_input->set_total_round(inputs.total_round);
   ADD_VECTOR_TO_PROTO(pb_forward_input->mutable_decode_kv_shape(),
                       inputs.decode_kv_shape);
   COUNTER_ADD(proto_latency_seconds_i2proto, timer.elapsed_seconds());

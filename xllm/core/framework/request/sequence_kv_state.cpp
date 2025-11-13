@@ -45,6 +45,10 @@ void KVCacheState::set_kv_cache_tokens_num(size_t num) {
 }
 
 void KVCacheState::incr_kv_cache_tokens_num(size_t num) {
+  if (FLAGS_max_decode_rounds > 0) {
+    kv_cache_tokens_num_ += num;
+    return;
+  }
   CHECK(kv_cache_tokens_num_ + num <= current_max_tokens_capacity());
   kv_cache_tokens_num_ += num;
 }

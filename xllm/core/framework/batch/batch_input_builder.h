@@ -51,7 +51,7 @@ class BatchInputBuilder {
 
   RawForwardInput build_raw_forward_input(uint32_t start_idx, uint32_t end_idx);
 
- private:
+ protected:
   // Core building methods
   void process_sequences(uint32_t start_idx, uint32_t end_idx);
   void process_sequences_multithreaded(uint32_t start_idx, uint32_t end_idx);
