@@ -552,6 +552,17 @@ void WorkerService::ExecuteModel(
                             out_tokens,
                             out_logprobs,
                             pb_forward_output);
+    // append batch-level beam output
+    {
+      const auto& bsg = safe_to(
+          forward_outputs.value().beam_sequence_group, torch::kCPU, true);
+      if (bsg.defined()) {
+        auto flat = bsg.flatten();
+        ADD_VECTOR_TO_PROTO(pb_forward_output->mutable_beam_sequence_group(),
+                            Slice<int32_t>{flat.data_ptr<int32_t>(),
+                                           static_cast<size_t>(flat.numel())});
+      }
+    }
     COUNTER_ADD(worker_service_latency_seconds, timer.elapsed_seconds());
   });
 }
@@ -618,6 +629,20 @@ void WorkerService::GetLastStepResult(
                                     out_tokens,
                                     out_logprobs,
                                     pb_forward_output);
+            // append batch-level beam output
+            {
+              const auto& bsg =
+                  safe_to(forward_outputs.value().beam_sequence_group,
+                          torch::kCPU,
+                          true);
+              if (bsg.defined()) {
+                auto flat = bsg.flatten();
+                ADD_VECTOR_TO_PROTO(
+                    pb_forward_output->mutable_beam_sequence_group(),
+                    Slice<int32_t>{flat.data_ptr<int32_t>(),
+                                   static_cast<size_t>(flat.numel())});
+              }
+            }
           }
         }
       });

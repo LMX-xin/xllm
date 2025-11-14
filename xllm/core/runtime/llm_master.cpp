@@ -13,6 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include "llm_master.h"
+
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <pybind11/pybind11.h>
@@ -29,7 +31,6 @@ limitations under the License.
 #include "common/metrics.h"
 #include "framework/model/model_args.h"
 #include "framework/request/request.h"
-#include "llm_master.h"
 #include "models/model_registry.h"
 #include "runtime/speculative_engine.h"
 #include "runtime/xservice_client.h"

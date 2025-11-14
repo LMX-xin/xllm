@@ -715,6 +715,9 @@ void proto_to_forward_output(const proto::ForwardOutput& pb_output,
   raw_forward_output.out_logprobs.reserve(pb_output.out_logprobs().size());
   raw_forward_output.out_logprobs.assign(pb_output.out_logprobs().begin(),
                                          pb_output.out_logprobs().end());
+  raw_forward_output.beam_sequence_group.assign(
+      pb_output.beam_sequence_group().begin(),
+      pb_output.beam_sequence_group().end());
   raw_forward_output.prepared_layer_id = pb_output.prepared_layer_id();
   for (size_t i = 0; i < seq_nums; ++i) {
     proto::SquenceOutput pb_seq_out = pb_output.outputs()[i];

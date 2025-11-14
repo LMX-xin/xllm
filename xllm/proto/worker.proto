@@ -242,6 +242,9 @@ message ForwardOutput {
   repeated int32 src_seq_idxes = 5;
   repeated int32 out_tokens = 6;
   repeated float out_logprobs = 7;
+  // batch-level beam output
+  // flattened 2D: row-major
+  repeated int32 beam_sequence_group = 8;
 }
 
 // master create Collective service

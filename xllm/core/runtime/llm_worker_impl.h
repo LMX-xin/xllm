@@ -59,7 +59,8 @@ class LLMWorkerImpl : public WorkerImpl {
 
  private:
   std::unique_ptr<BeamSearcher> beam_searcher_;
-  std::optional<ForwardOutput> step_rec(const BatchedForwardInputs& inputs);
+  std::optional<ForwardOutput> step_multi_round(
+      const BatchedForwardInputs& inputs);
 };
 
 }  // namespace xllm

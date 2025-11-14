@@ -78,9 +78,10 @@ class Batch {
   RawForwardInput prepare_forward_input(uint32_t start_idx,
                                         uint32_t end_idx,
                                         ThreadPool* thread_pool = nullptr);
-  RawForwardInput prepare_multi_step_forward_input(uint32_t start_idx,
-                                                   uint32_t end_idx,
-                                                   ThreadPool* thread_pool = nullptr);
+  RawForwardInput prepare_multi_step_forward_input(
+      uint32_t start_idx,
+      uint32_t end_idx,
+      ThreadPool* thread_pool = nullptr);
 
   // process output
   //
@@ -105,6 +106,8 @@ class Batch {
   void process_embedding_output(const torch::Tensor& embedding);
   void process_decode_beam_search_output(const RawForwardOutput& raw_output,
                                          bool replace_fake_token);
+
+  void process_beam_sequence_group(const RawForwardOutput& raw_output);
 
   const std::vector<uint32_t>& get_allowed_max_tokens() const {
     return allowed_max_tokens_;

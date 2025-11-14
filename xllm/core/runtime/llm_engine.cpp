@@ -306,7 +306,7 @@ bool LLMEngine::allocate_kv_cache(const Engine::KVCacheCapacity& kv_cache_cap) {
     kv_cache_shape.emplace_back(std::vector<int64_t>{
         kv_cache_cap.n_blocks, n_local_kv_heads_, block_size, head_dim_});
     kv_cache_shape.emplace_back(std::vector<int64_t>{
-        kv_cache_cap.n_blocks, n_local_kv_heads_, block_size, head_dim_});
+        kv_cache_cap.n_blocks, n_local_kv_heads_, block_size, , head_dim_});
 #endif
   }
 
@@ -646,7 +646,7 @@ bool LLMEngine::unlink_cluster(const std::vector<uint64_t>& cluster_ids,
   return true;
 }
 
-ForwardOutput LLMEngine::step_rec(std::vector<Batch>& batch) {
+ForwardOutput LLMEngine::step_multi_round(std::vector<Batch>& batch) {
   Timer timer;
   DCHECK(dp_size_ == batch.size())
       << "Split DP batch failed with dp_size as " << dp_size_
@@ -672,7 +672,12 @@ ForwardOutput LLMEngine::step_rec(std::vector<Batch>& batch) {
       if (result.value().outputs.empty() && layer_forward_interrupted_) {
         throw ForwardInterruptedException();
       }
-      batch[dp_rank].process_decode_beam_search_output(result.value(), false);
+      auto& raw = result.value();
+      if (!raw.beam_sequence_group.empty()) {
+        batch[dp_rank].process_beam_sequence_group(raw);
+      } else {
+        batch[dp_rank].process_decode_beam_search_output(raw, false);
+      }
     } else {
       LOG(FATAL) << "Failed to execute model, result has no value";
     }
@@ -688,7 +693,7 @@ ForwardOutput LLMEngine::step(std::vector<Batch>& batch) {
     return {};
   }
   if (FLAGS_max_decode_rounds > 0) {
-    return step_rec(batch);
+    return step_multi_round(batch);
   }
   Timer timer;
   DCHECK(dp_size_ == batch.size())

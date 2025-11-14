@@ -13,6 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include "fixsteps_scheduler.h"
+
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
 #include <folly/MPMCQueue.h>
@@ -24,7 +26,6 @@ limitations under the License.
 #include <memory>
 
 #include "common/metrics.h"
-#include "fixsteps_scheduler.h"
 #include "framework/batch/batch.h"
 #include "framework/batch/batch_factory.h"
 #include "framework/request/request.h"

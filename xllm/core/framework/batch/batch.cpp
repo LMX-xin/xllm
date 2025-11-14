@@ -393,6 +393,7 @@ void Batch::process_decode_beam_search_output(
   if (beam_width <= 1) {
     return;
   }
+
   // VLOG(1) << "process_decode_beam_search_output";
   // VLOG(1) << "beam_width: " << beam_width;
   // VLOG(1) << "sequences_.size(): " << sequences_.size();
@@ -464,6 +465,39 @@ void Batch::process_decode_beam_search_output(
        sequence_group_id < sequence_groups_.size();
        sequence_group_id++) {
     update_for_sequence_group(sequence_group_id);
+  }
+}
+
+void Batch::process_beam_sequence_group(const RawForwardOutput& raw_output) {
+  const int32_t beam_width = sequences_[0]->sampling_param()->beam_width;
+  if (beam_width <= 1) {
+    return;
+  }
+  if (raw_output.beam_sequence_group.empty()) {
+    return;
+  }
+  int32_t total_rounds = FLAGS_max_decode_rounds;
+  size_t num_groups = sequence_groups_.size();
+  for (size_t g = 0; g < num_groups; ++g) {
+    std::vector<std::vector<int32_t>> group_flat2d;
+    group_flat2d.reserve(static_cast<size_t>(beam_width));
+    std::vector<float> last_logprobs;
+    last_logprobs.reserve(static_cast<size_t>(beam_width));
+    for (int b = 0; b < beam_width; ++b) {
+      int row = static_cast<int>(g) * beam_width + b;
+      std::vector<int32_t> row_tokens;
+      row_tokens.reserve(static_cast<size_t>(total_rounds));
+      for (int c = 0; c < total_rounds; ++c) {
+        int idx = row * total_rounds + c;
+        row_tokens.push_back(raw_output.beam_sequence_group[idx]);
+      }
+      group_flat2d.emplace_back(std::move(row_tokens));
+      if (!raw_output.out_logprobs.empty()) {
+        last_logprobs.push_back(raw_output.out_logprobs[row]);
+      }
+    }
+    sequences_[g]->set_beam_result(
+        beam_width, total_rounds, group_flat2d, last_logprobs);
   }
 }
 }  // namespace xllm

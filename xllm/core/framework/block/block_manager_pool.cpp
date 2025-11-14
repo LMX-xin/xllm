@@ -13,8 +13,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "block_manager_impl.h"
 #include "block_manager_pool.h"
+
+#include "block_manager_impl.h"
 #include "concurrent_block_manager_impl.h"
 
 namespace xllm {

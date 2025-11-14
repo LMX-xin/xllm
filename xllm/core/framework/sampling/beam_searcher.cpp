@@ -22,7 +22,6 @@ BeamSearchOutput BeamSearcher::forward(
     const torch::Tensor& top_logprobs) const {
 #if defined(USE_NPU)
   BeamSearchOutput output;
-
   int64_t num_seq = logprobs.numel();
   output.out_tokens =
       torch::empty({num_seq, 1}, logprobs.options().dtype(torch::kInt32));

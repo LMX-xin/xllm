@@ -269,6 +269,28 @@ class Sequence final {
   // get sequence id
   int32_t seq_id() const { return seq_id_; }
 
+  void set_beam_result(int32_t bw,
+                       int32_t total_rounds,
+                       const std::vector<std::vector<int32_t>>& flat,
+                       const std::vector<float>& last_logprobs) {
+    beam_width_cached_ = bw;
+    total_rounds_cached_ = total_rounds;
+    beam_seq_group_flat_ = flat;
+    beam_last_logprobs_ = last_logprobs;
+  }
+  bool has_beam_result() const {
+    return beam_width_cached_ > 0 && total_rounds_cached_ > 0 &&
+           !beam_seq_group_flat_.empty();
+  }
+  const std::vector<std::vector<int32_t>>& beam_seq_group_flat() const {
+    return beam_seq_group_flat_;
+  }
+  const std::vector<float>& beam_last_logprobs() const {
+    return beam_last_logprobs_;
+  }
+  int32_t beam_width_cached() const { return beam_width_cached_; }
+  int32_t total_rounds_cached() const { return total_rounds_cached_; }
+
  private:
   // the index of the sequence in the request
   size_t index_ = 0;
@@ -363,6 +385,11 @@ class Sequence final {
 
   // engine REC 内部 decode 轮次标志
   bool in_step_decode_round_ = false;
+
+  int32_t beam_width_cached_ = 0;
+  int32_t total_rounds_cached_ = 0;
+  std::vector<std::vector<int32_t>> beam_seq_group_flat_;
+  std::vector<float> beam_last_logprobs_;
 };
 
 }  // namespace xllm

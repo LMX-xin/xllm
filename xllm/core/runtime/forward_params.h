@@ -145,6 +145,7 @@ struct ForwardOutput {
   int32_t prepared_layer_id;
 
   BeamSearchOutput beam_search_output;
+  torch::Tensor beam_sequence_group;
 };
 
 // Model input with raw data, which will be
@@ -223,6 +224,8 @@ struct RawForwardOutput {
   std::vector<int32_t> src_seq_idxes;
   std::vector<int32_t> out_tokens;
   std::vector<float> out_logprobs;
+  // batch-level beam output
+  std::vector<int32_t> beam_sequence_group;  // flattened 2D
 };
 
 struct BatchedForwardInputs {

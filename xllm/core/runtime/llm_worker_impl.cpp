@@ -37,7 +37,15 @@ limitations under the License.
 #include "util/threadpool.h"
 #include "util/timer.h"
 #if defined(USE_NPU)
+#include <tuple>
+
 #include "kernels/npu/xllm_ops/cache_select.h"
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+beam_search_group_impl_npu(const at::Tensor& log_probs,
+                           const at::Tensor& top_tokens,
+                           const at::Tensor& top_probs,
+                           const at::Tensor& sequence,
+                           int64_t current_step);
 #endif
 
 namespace xllm {
@@ -74,7 +82,7 @@ std::optional<ForwardOutput> LLMWorkerImpl::step(
   device_.set_device();
   Timer timer;
   if (!inputs.micro_inputs.empty() && inputs.micro_inputs[0].total_round > 0) {
-    return step_rec(inputs);
+    return step_multi_round(inputs);
   }
   if (!inputs.micro_inputs.empty() && inputs.micro_inputs[0].total_round > 0) {
     std::vector<torch::Tensor> flatten_tokens_micro_batches;
@@ -157,8 +165,7 @@ std::optional<ForwardOutput> LLMWorkerImpl::step(
           output.logits = logits;
 
           BeamSearchOutput beam_search_output;
-          if (concated_sampling_params.use_beam_search &&
-              inputs.acc_logprob.numel() > 0) {
+          if (concated_sampling_params.use_beam_search) {
             beam_search_output =
                 beam_searcher_->forward(inputs.acc_logprob,
                                         sample_output.top_tokens,
@@ -169,6 +176,7 @@ std::optional<ForwardOutput> LLMWorkerImpl::step(
           output.logprobs = concated_sampling_params.logprobs;
           output.max_top_logprobs = concated_sampling_params.max_top_logprobs;
           output.beam_search_output = beam_search_output;
+          output.beam_sequence_group = inputs.beam_sequence_group;
 
 #if defined(USE_NPU)
           int32_t beam_width = inputs.micro_inputs[0].beam_width;
@@ -189,12 +197,8 @@ std::optional<ForwardOutput> LLMWorkerImpl::step(
             beam_width > 1 && round > 0) {
           auto sample_output =
               sampler_->forward(logits, concated_sampling_params);
-          auto beam_search_output =
-              beam_searcher_->forward(inputs.acc_logprob,
-                                      sample_output.top_tokens,
-                                      sample_output.top_logprobs);
-          xllm_ops::cache_select(beam_search_output.out_tokens,
-                                 beam_search_output.group_offset,
+          xllm_ops::cache_select(inputs.beam_token_ids,
+                                 inputs.beam_group_offset,
                                  input_params_micro_batches[0].decode_k_cache,
                                  input_params_micro_batches[0].decode_v_cache,
                                  beam_width,
@@ -491,8 +495,8 @@ std::optional<ForwardOutput> LLMWorkerImpl::step(
     int32_t beam_width = inputs.micro_inputs[0].beam_width;
     if (beam_width > 1 && current_round > 0) {
       VLOG(1) << "cache select" << beam_width << " " << current_round;
-      xllm_ops::cache_select(beam_search_output.out_tokens,
-                             beam_search_output.group_offset,
+      xllm_ops::cache_select(beam_search_output.beam_token_ids,
+                             beam_search_output.beam_group_offset,
                              input_params_micro_batches[0].decode_k_cache,
                              input_params_micro_batches[0].decode_v_cache,
                              beam_width,
@@ -555,7 +559,7 @@ std::optional<ForwardOutput> LLMWorkerImpl::step(
   return output;
 }
 
-std::optional<ForwardOutput> LLMWorkerImpl::step_rec(
+std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
     const BatchedForwardInputs& inputs) {
   device_.set_device();
   Timer timer;
@@ -576,40 +580,18 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_rec(
         std::move(inputs.micro_inputs[i].positions));
     input_params_micro_batches.push_back(
         std::move(inputs.micro_inputs[i].input_params));
-
-    if (options_.instance_role() == InstanceRole::PREFILL &&
-        options_.kv_cache_transfer_mode() == "PUSH" &&
-        !inputs.micro_inputs[i].transfer_kv_infos.empty()) {
-#if defined(USE_NPU)
-      std::shared_ptr<NPULayerSynchronizerImpl> layer_synchronizer =
-          std::make_shared<NPULayerSynchronizerImpl>(
-              context_.get_model_args().n_layers());
-      const_cast<ModelInputParams*>(&(input_params_micro_batches[i]))
-          ->layer_synchronizer = layer_synchronizer;
-
-      futures.emplace_back(kv_cache_transfer_->push_kv_blocks_async(
-          inputs.micro_inputs[i].transfer_kv_infos,
-          context_.get_parallel_args(),
-          layer_synchronizer,
-          is_spec_draft_));
-#endif
-    }
-  }
-  if (FLAGS_enable_eplb) {
-    eplb_executor_->eplb_execute(inputs.micro_inputs[0].eplb_info);
   }
 
   int32_t total_rounds = inputs.micro_inputs[0].total_round;
   ForwardOutput output;
-  if (FLAGS_enable_eplb) {
-    output.expert_load_data = expert_load_data_;
-    output.prepared_layer_id = eplb_executor_->get_ready_layer_id();
-    if (output.prepared_layer_id != -1) {
-      eplb_executor_->reset_ready_layer_id();
-    }
-  }
 
   for (int32_t round = 0; round <= total_rounds; ++round) {
+    if (round > 0) {
+      flatten_tokens_micro_batches[0] = inputs.beam_token_ids;
+      // update beam_sequence_group column with current tokens on device
+      // This will be returned via ForwardOutput for engine usage
+      // Note: we keep positions unchanged per instruction
+    }
     for (auto i = 0; i < input_params_micro_batches.size(); ++i) {
       auto& mip = input_params_micro_batches[i];
       if (!mip.current_round_tensor_list.empty() && round >= 0 &&
@@ -637,25 +619,36 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_rec(
         sample_output = sampler_->forward(logits, concated_sampling_params);
         output.logits = logits;
 
-        BeamSearchOutput beam_search_output;
-        if (concated_sampling_params.use_beam_search &&
-            inputs.acc_logprob.numel() > 0) {
-          beam_search_output =
-              beam_searcher_->forward(inputs.acc_logprob,
-                                      sample_output.top_tokens,
-                                      sample_output.top_logprobs);
-        }
+        auto beam_search_output =
+            beam_searcher_->forward(inputs.acc_logprob,
+                                    sample_output.top_tokens,
+                                    sample_output.top_logprobs);
         output.sample_output = sample_output;
         output.do_sample = concated_sampling_params.do_sample;
         output.logprobs = concated_sampling_params.logprobs;
         output.max_top_logprobs = concated_sampling_params.max_top_logprobs;
-        output.beam_search_output = beam_search_output;
+        auto beam_group_tuple =
+            beam_search_group_impl_npu(logits,
+                                       sample_output.top_tokens,
+                                       sample_output.top_logprobs,
+                                       inputs.beam_sequence_group,
+                                       round);
+        auto& out_token_ids = std::get<0>(beam_group_tuple);
+        auto& out_token_index = std::get<1>(beam_group_tuple);
+        auto& out_log_probs = std::get<2>(beam_group_tuple);
+        auto& out_beam_count_prefix_sums = std::get<3>(beam_group_tuple);
+        auto& out_sequence = std::get<4>(beam_group_tuple);
+        output.beam_search_output.src_seq_idxes = out_token_index;
+        output.beam_search_output.out_tokens = out_token_ids;
+        output.beam_search_output.out_logprobs = out_log_probs;
+        output.beam_search_output.group_offset = out_beam_count_prefix_sums;
+        output.beam_sequence_group = out_sequence;
 
 #if defined(USE_NPU)
         int32_t beam_width = inputs.micro_inputs[0].beam_width;
         if (beam_width > 1 && round > 0) {
-          xllm_ops::cache_select(beam_search_output.out_tokens,
-                                 beam_search_output.group_offset,
+          xllm_ops::cache_select(out_token_ids,
+                                 out_beam_count_prefix_sums,
                                  input_params_micro_batches[0].decode_k_cache,
                                  input_params_micro_batches[0].decode_v_cache,
                                  beam_width,
@@ -670,16 +663,28 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_rec(
           beam_width > 1 && round > 0) {
         auto sample_output =
             sampler_->forward(logits, concated_sampling_params);
-        auto beam_search_output =
-            beam_searcher_->forward(inputs.acc_logprob,
-                                    sample_output.top_tokens,
-                                    sample_output.top_logprobs);
-        xllm_ops::cache_select(beam_search_output.out_tokens,
-                               beam_search_output.group_offset,
+        auto beam_group_tuple =
+            beam_search_group_impl_npu(logits,
+                                       sample_output.top_tokens,
+                                       sample_output.top_logprobs,
+                                       inputs.beam_sequence_group,
+                                       round);
+        auto& out_token_ids = std::get<0>(beam_group_tuple);
+        auto& out_token_index = std::get<1>(beam_group_tuple);
+        auto& out_log_probs = std::get<2>(beam_group_tuple);
+        auto& out_beam_count_prefix_sums = std::get<3>(beam_group_tuple);
+        auto& out_sequence = std::get<4>(beam_group_tuple);
+        xllm_ops::cache_select(out_token_ids,
+                               out_beam_count_prefix_sums,
                                input_params_micro_batches[0].decode_k_cache,
                                input_params_micro_batches[0].decode_v_cache,
                                beam_width,
                                round);
+        output.beam_search_output.src_seq_idxes = out_token_index;
+        output.beam_search_output.out_tokens = out_token_ids;
+        output.beam_search_output.out_logprobs = out_log_probs;
+        output.beam_search_output.group_offset = out_beam_count_prefix_sums;
+        output.beam_sequence_group = out_sequence;
       }
 #endif
     }
