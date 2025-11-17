@@ -255,6 +255,9 @@ Engine::KVCacheCapacity LLMEngine::estimate_kv_cache_capacity() {
   } else {
     slot_size = 2 * dtype_size * head_dim_ * n_local_kv_heads_;
   }
+  if (FLAGS_max_decode_rounds > 0) {
+    slot_size *= FLAGS_max_decode_rounds;
+  }
   kv_cache_cap.slot_size = slot_size;
   kv_cache_cap.n_layers = args_.n_layers();
 
@@ -298,10 +301,23 @@ bool LLMEngine::allocate_kv_cache(const Engine::KVCacheCapacity& kv_cache_cap) {
         kv_cache_cap.n_blocks, block_size, 1, args_.qk_rope_head_dim()});
   } else {
 #if defined(USE_NPU)
-    kv_cache_shape.emplace_back(std::vector<int64_t>{
-        kv_cache_cap.n_blocks, block_size, n_local_kv_heads_, head_dim_});
-    kv_cache_shape.emplace_back(std::vector<int64_t>{
-        kv_cache_cap.n_blocks, block_size, n_local_kv_heads_, head_dim_});
+    if (FLAGS_max_decode_rounds > 0) {
+      kv_cache_shape.emplace_back(std::vector<int64_t>{kv_cache_cap.n_blocks,
+                                                       block_size,
+                                                       n_local_kv_heads_,
+                                                       FLAGS_max_decode_rounds,
+                                                       head_dim_});
+      kv_cache_shape.emplace_back(std::vector<int64_t>{kv_cache_cap.n_blocks,
+                                                       block_size,
+                                                       n_local_kv_heads_,
+                                                       FLAGS_max_decode_rounds,
+                                                       head_dim_});
+    } else {
+      kv_cache_shape.emplace_back(std::vector<int64_t>{
+          kv_cache_cap.n_blocks, block_size, n_local_kv_heads_, head_dim_});
+      kv_cache_shape.emplace_back(std::vector<int64_t>{
+          kv_cache_cap.n_blocks, block_size, n_local_kv_heads_, head_dim_});
+    }
 #elif defined(USE_MLU)
     kv_cache_shape.emplace_back(std::vector<int64_t>{
         kv_cache_cap.n_blocks, n_local_kv_heads_, block_size, head_dim_});
@@ -782,7 +798,7 @@ ForwardOutput LLMEngine::step(std::vector<Batch>& batch) {
       for (auto& micro : model_inputs[dp]) {
         micro.beam_width = beam_width;
         micro.total_round = i + 1;
-        micro.decode_kv_shape = {
+        micro.shared_kv_shape = {
             static_cast<int64_t>(batch_size * FLAGS_max_token_per_req),
             static_cast<int64_t>(head_num),
             static_cast<int64_t>(head_dim)};

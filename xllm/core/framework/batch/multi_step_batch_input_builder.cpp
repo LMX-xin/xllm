@@ -246,7 +246,7 @@ ForwardInput MultiStepBatchInputBuilder::state_to_forward_input() {
   forward_input.beam_width = FLAGS_beam_width;
   forward_input.total_round = multi_step_state.total_steps;
 
-  // Set decode_kv_shape if we have multi-step decode data
+  // Set shared_kv_shape if we have multi-step decode data
   if (!multi_step_state.decode_seq_lens.empty() && !sequences_.empty()) {
     // Set decode kv cache shape for step-level decode
     // Format: [batch_size * beam_width, n_kv_heads, step_rounds, head_dim]
@@ -256,9 +256,8 @@ ForwardInput MultiStepBatchInputBuilder::state_to_forward_input() {
     int64_t n_kv_heads = args_ ? args_->n_kv_heads().value_or(args_->n_heads()) : 0;
     int64_t head_dim = args_ ? args_->head_dim() : 0;
 
-    forward_input.decode_kv_shape = {batch_size * FLAGS_max_token_per_req,
-                                     n_kv_heads,
-                                     head_dim};
+    forward_input.shared_kv_shape = {
+        batch_size * FLAGS_max_token_per_req, n_kv_heads, head_dim};
   }
 
   if (!multi_step_state.decode_seq_lens.empty()) {
@@ -291,7 +290,7 @@ RawForwardInput MultiStepBatchInputBuilder::state_to_raw_forward_input() {
   raw_forward_input.beam_width = FLAGS_beam_width;
   raw_forward_input.total_round = multi_step_state.total_steps;
 
-  // Set decode_kv_shape if we have multi-step decode data
+  // Set shared_kv_shape if we have multi-step decode data
   if (!multi_step_state.decode_seq_lens.empty() && !sequences_.empty()) {
     // Set decode kv cache shape for step-level decode
     // Format: [batch_size * beam_width, n_kv_heads, step_rounds, head_dim]
@@ -301,9 +300,8 @@ RawForwardInput MultiStepBatchInputBuilder::state_to_raw_forward_input() {
     int64_t n_kv_heads = args_ ? args_->n_kv_heads().value_or(args_->n_heads()) : 0;
     int64_t head_dim = args_ ? args_->head_dim() : 0;
 
-    raw_forward_input.decode_kv_shape = {batch_size * FLAGS_max_token_per_req,
-                                         n_kv_heads,
-                                         head_dim};
+    raw_forward_input.shared_kv_shape = {
+        batch_size * FLAGS_max_token_per_req, n_kv_heads, head_dim};
   }
 
   if (!multi_step_state.decode_seq_lens.empty()) {

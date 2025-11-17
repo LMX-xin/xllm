@@ -463,18 +463,24 @@ void WorkerImpl::prepare_work_before_execute(
         int32_t beam_width = fwd_inputs_on_device.beam_width;
         int32_t current_round = fwd_inputs_on_device.current_round;
         int32_t total_round = fwd_inputs_on_device.total_round;
-        const auto& shape = fwd_inputs_on_device.decode_kv_shape;
-        if (!(mip.decode_k_cache.defined() && mip.decode_v_cache.defined()) &&
-            shape.size() == 3) {
+        const auto& shape = fwd_inputs_on_device.shared_kv_shape;
+        if (shape.size() == 3) {
           int64_t num_tokens = shape[0];
           int64_t head_num = shape[1];
           int64_t head_dim = shape[2];
           auto fp_options =
               torch::TensorOptions().dtype(dtype_).device(device_);
-          mip.decode_k_cache =
-              torch::zeros({num_tokens, head_num, head_dim}, fp_options);
-          mip.decode_v_cache =
-              torch::zeros({num_tokens, head_num, head_dim}, fp_options);
+          int32_t num_layers = context_.get_model_args().n_layers();
+          mip.shared_k_caches.clear();
+          mip.shared_v_caches.clear();
+          mip.shared_k_caches.reserve(num_layers);
+          mip.shared_v_caches.reserve(num_layers);
+          for (int32_t layer_id = 0; layer_id < num_layers; ++layer_id) {
+            mip.shared_k_caches.emplace_back(
+                torch::zeros({num_tokens, head_num, head_dim}, fp_options));
+            mip.shared_v_caches.emplace_back(
+                torch::zeros({num_tokens, head_num, head_dim}, fp_options));
+          }
         }
         // scalar metadata tensors (int32 on device)
         {
@@ -486,7 +492,7 @@ void WorkerImpl::prepare_work_before_execute(
             mip.current_round_tensor_list.push_back(
                 torch::tensor({r}, int_options));
           }
-          mip.total_round_tensor = torch::tensor({total_round}, int_options);
+
           // beam batch-level tensors are constructed in WorkerService
         }
       }

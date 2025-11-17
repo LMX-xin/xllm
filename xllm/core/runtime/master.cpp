@@ -51,7 +51,9 @@ Master::Master(const Options& options, EngineType type) : options_(options) {
   LOG(INFO) << "Master init options: " << options.to_string();
   auto opt_block_size = options.block_size();
   if (FLAGS_max_decode_rounds > 0) {
-    options_.block_size = FLAGS_max_decode_rounds * FLAGS_beam_width;
+    check(FLAGS_beam_width > 0,
+          "beam_width must be greater than 0 when max_decode_rounds > 0");
+    options_.block_size = FLAGS_beam_width;
     opt_block_size = options_.block_size;
   }
 #if defined(USE_NPU)

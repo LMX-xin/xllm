@@ -95,16 +95,22 @@ struct ModelInputParams {
     params.new_cache_slot_offsets = safe_to(new_cache_slot_offsets, device);
     params.kv_cache_start_offsets = safe_to(kv_cache_start_offsets, device);
 
-    // decode kv cache (optional)
-    params.decode_k_cache = safe_to(decode_k_cache, device);
-    params.decode_v_cache = safe_to(decode_v_cache, device);
+    // shared kv caches per layer (optional)
+    params.shared_k_caches.clear();
+    params.shared_v_caches.clear();
+    for (const auto& t : shared_k_caches) {
+      params.shared_k_caches.push_back(safe_to(t, device));
+    }
+    for (const auto& t : shared_v_caches) {
+      params.shared_v_caches.push_back(safe_to(t, device));
+    }
     params.beam_width_tensor = safe_to(beam_width_tensor, device);
     params.current_round_tensor = safe_to(current_round_tensor, device);
     params.current_round_tensor_list.clear();
     for (const auto& t : current_round_tensor_list) {
       params.current_round_tensor_list.push_back(safe_to(t, device));
     }
-    params.total_round_tensor = safe_to(total_round_tensor, device);
+
     params.beam_width = beam_width;
     params.current_round = current_round;
     params.total_round = total_round;
@@ -217,13 +223,12 @@ struct ModelInputParams {
   // Used by ACL Graph Executor to avoid repeated memory allocation
   torch::Tensor graph_buffer;
 
-  // optional decode kv cache provided by engine for step-level decode
-  torch::Tensor decode_k_cache;
-  torch::Tensor decode_v_cache;
+  // shared kv caches provided by engine for step-level decode, per layer
+  std::vector<torch::Tensor> shared_k_caches;
+  std::vector<torch::Tensor> shared_v_caches;
   torch::Tensor beam_width_tensor;
   torch::Tensor current_round_tensor;
   std::vector<torch::Tensor> current_round_tensor_list;
-  torch::Tensor total_round_tensor;
   // beam width for step-level decode
   int32_t beam_width = 1;
   // current round for step-level decode

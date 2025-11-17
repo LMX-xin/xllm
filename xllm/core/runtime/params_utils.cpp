@@ -465,9 +465,9 @@ void proto_to_forward_input(const proto::ForwardInput* pb_forward_input,
   forward_inputs.beam_width = pb_forward_input->beam_width();
   forward_inputs.current_round = pb_forward_input->current_round();
   forward_inputs.total_round = pb_forward_input->total_round();
-  forward_inputs.decode_kv_shape =
-      std::vector<int64_t>(pb_forward_input->decode_kv_shape().begin(),
-                           pb_forward_input->decode_kv_shape().end());
+  forward_inputs.shared_kv_shape =
+      std::vector<int64_t>(pb_forward_input->shared_kv_shape().begin(),
+                           pb_forward_input->shared_kv_shape().end());
   COUNTER_ADD(proto_latency_seconds_proto2i, timer.elapsed_seconds());
 }
 
@@ -692,8 +692,8 @@ void forward_input_to_proto(const RawForwardInput& inputs,
   pb_forward_input->set_beam_width(inputs.beam_width);
   pb_forward_input->set_current_round(inputs.current_round);
   pb_forward_input->set_total_round(inputs.total_round);
-  ADD_VECTOR_TO_PROTO(pb_forward_input->mutable_decode_kv_shape(),
-                      inputs.decode_kv_shape);
+  ADD_VECTOR_TO_PROTO(pb_forward_input->mutable_shared_kv_shape(),
+                      inputs.shared_kv_shape);
   COUNTER_ADD(proto_latency_seconds_i2proto, timer.elapsed_seconds());
 }
 

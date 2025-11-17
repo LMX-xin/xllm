@@ -18,20 +18,19 @@ limitations under the License.
 #include <torch_npu/csrc/libs/init_npu.h>
 #include <torch_npu/torch_npu.h>
 
+#include <tuple>
 #include <vector>
 
 #include "acl/acl.h"
-#include "aclnn_select_unshared_kv.h"
+#include "aclnn_beam_search_group.h"
 #include "acltensor_utils.h"
 #include "util/tensor_helper.h"
 
 namespace xllm_ops {
-void cache_select(const torch::Tensor& beam_index,
-                  std::vector<torch::Tensor> x_key_block,
-                  std::vector<torch::Tensor> x_value_block,
-                  const torch::Tensor& block_table,
-                  const torch::Tensor& group_offset,
-                  int64_t decode_step,
-                  int64_t beam_size,
-                  int64_t layer_num);
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+beam_search_group(const torch::Tensor& logprobs,
+                  const torch::Tensor& top_tokens,
+                  const torch::Tensor& top_logprobs,
+                  torch::Tensor& sequence_group,
+                  int64_t current_step);
 }  // namespace xllm_ops

@@ -9,12 +9,14 @@ cc_library(
     acltensor_utils.h
     beam_search.h
     cache_select.h
+    beam_search_group.h
   SRCS
     replace_token.cpp
     top_k_top_p.cpp
     acltensor_utils.cpp
     beam_search.cpp
     cache_select.cpp
+    beam_search_group.h
   DEPS
     atb
     torch_npu

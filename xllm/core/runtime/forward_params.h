@@ -102,7 +102,7 @@ struct ForwardInput {
     inputs.beam_width = beam_width;
     inputs.current_round = current_round;
     inputs.total_round = total_round;
-    inputs.decode_kv_shape = decode_kv_shape;
+    inputs.shared_kv_shape = shared_kv_shape;
     return inputs;
   }
   // flatten token ids
@@ -123,7 +123,7 @@ struct ForwardInput {
   int32_t total_round = 0;
   // decode kv cache shape planned by engine: [batch_size * beam_width,
   // n_kv_heads, step_rounds, head_dim]
-  std::vector<int64_t> decode_kv_shape;
+  std::vector<int64_t> shared_kv_shape;
 };
 
 // output after forward execution
@@ -209,7 +209,7 @@ struct RawForwardInput {
   int32_t total_round = 0;
   // decode kv cache shape planned by engine: [batch_size * beam_width,
   // n_kv_heads, step_rounds, head_dim]
-  std::vector<int64_t> decode_kv_shape;
+  std::vector<int64_t> shared_kv_shape;
 };
 
 struct RawSampleOutput {
