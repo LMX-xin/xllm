@@ -55,8 +55,8 @@ class MultiStepBatchInputBuilder : public BatchInputBuilder {
   // logic
   void process_single_sequence(
       int32_t seq_index,
-      BuilderState* state_ptr = nullptr,
-      std::unordered_set<int32_t>* write_block_ids_ptr = nullptr) override;
+      BatchInputBuilder::BuilderState* state_ptr = nullptr,
+      std::unordered_set<int32_t>* write_block_ids_ptr = nullptr);
 
  private:
   // State management for MultiStep

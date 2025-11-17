@@ -66,7 +66,7 @@ MultiStepBatchInputBuilder::MultiStepBatchInputBuilder(
 
 void MultiStepBatchInputBuilder::process_single_sequence(
     int32_t seq_index,
-    BuilderState* state_ptr,
+    BatchInputBuilder::BuilderState* state_ptr,
     std::unordered_set<int32_t>* write_block_ids_ptr) {
   // 三合一只会调 process_single_sequence，所以这里不需要判断 state_ptr 是否为空
   MultiStepBuilderState& state = multi_step_state_;
