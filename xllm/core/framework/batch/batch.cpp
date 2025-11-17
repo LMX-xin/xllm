@@ -101,6 +101,16 @@ void Batch::process_sample_output(const RawForwardOutput& raw_output,
   // if raw_output.outputs.size() value is 0,
   // this means all sequences are in prefill stage status.
   const int64_t num_seqs = raw_output.outputs.size();
+  if (num_seqs == 0) {
+    // Pure prefill for this step: no new tokens produced.
+    // Allow sequence state machine to progress if needed, then return early.
+    for (auto* seq : this->sequences_) {
+      if (!seq->finished()) {
+        (void)update_sequence_state(seq, replace_fake_token);
+      }
+    }
+    return;
+  }
   int64_t output_idx = 0;
   for (auto* seq : sequences_) {
     if (seq->finished()) {

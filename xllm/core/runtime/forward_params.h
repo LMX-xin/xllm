@@ -23,10 +23,17 @@ limitations under the License.
 
 #include "common/types.h"
 #include "framework/model/model_input_params.h"
-#include "framework/sampling/beam_searcher.h"
+// #include "framework/sampling/beam_searcher.h"
 #include "framework/sampling/sampling_params.h"
 
 namespace xllm {
+
+struct BeamSearchOutput {
+  torch::Tensor src_seq_idxes;  // [num_seq]
+  torch::Tensor out_tokens;     // [num_seq]
+  torch::Tensor out_logprobs;   // [num_seq]
+  torch::Tensor group_offsets;  // [num_seq]
+};
 
 class WorkerType {
  public:

@@ -78,9 +78,15 @@ bool AclGraph::capture(CausalLM* model,
   const auto block_size = options.block_size();
   const int64_t max_block_table_len =
       (FLAGS_max_tokens_per_seq + block_size - 1) / block_size + 1;
-  block_tables_ =
-      torch::zeros({batch_size_, max_block_table_len},
-                   torch::dtype(torch::kInt).device(tensor_options.device()));
+  if (FLAGS_enable_beam_search_kernel) {
+    block_tables_ =
+        torch::zeros({batch_size_, 1},
+                     torch::dtype(torch::kInt).device(tensor_options.device()));
+  } else {
+    block_tables_ =
+        torch::zeros({batch_size_, max_block_table_len},
+                     torch::dtype(torch::kInt).device(tensor_options.device()));
+  }
 
   // Output tensor for hidden states
   hidden_states_ =

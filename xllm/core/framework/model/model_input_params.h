@@ -94,6 +94,22 @@ struct ModelInputParams {
     // Copy graph_buffer to device
     params.graph_buffer = safe_to(graph_buffer, device, true);
 
+    // move decode kv caches to target device per tensor
+    params.shared_k_cache.clear();
+    params.shared_k_cache.reserve(shared_k_cache.size());
+    for (const auto& t : shared_k_cache) {
+      params.shared_k_cache.emplace_back(safe_to(t, device));
+    }
+    params.shared_v_cache.clear();
+    params.shared_v_cache.reserve(shared_v_cache.size());
+    for (const auto& t : shared_v_cache) {
+      params.shared_v_cache.emplace_back(safe_to(t, device));
+    }
+    params.beam_width_tensor = safe_to(beam_width_tensor, device);
+    params.current_step_tensor = safe_to(current_step_tensor, device);
+    params.beam_width = beam_width;
+    params.current_step = current_step;
+
     return params;
   }
 
@@ -193,6 +209,15 @@ struct ModelInputParams {
   // Graph execution buffer for temporary tensor storage
   // Used by ACL Graph Executor to avoid repeated memory allocation
   torch::Tensor graph_buffer;
+  // std::vector<torch::Tensor> decode_k_cache;
+  // std::vector<torch::Tensor> decode_v_cache;
+  // shared kv cache buffers for beam search
+  std::vector<torch::Tensor> shared_k_cache;
+  std::vector<torch::Tensor> shared_v_cache;
+  torch::Tensor beam_width_tensor;
+  torch::Tensor current_step_tensor;
+  int32_t beam_width = 0;
+  int32_t current_step = 0;
 };
 
 }  // namespace xllm

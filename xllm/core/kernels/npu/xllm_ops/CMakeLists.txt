@@ -7,11 +7,15 @@ cc_library(
     replace_token.h
     top_k_top_p.h
     acltensor_utils.h
+    cache_select.h
+    beam_search_group.h
     beam_search.h
   SRCS
     replace_token.cpp
     top_k_top_p.cpp
     acltensor_utils.cpp
+    cache_select.cpp
+    beam_search_group.cpp
     beam_search.cpp
   DEPS
     atb

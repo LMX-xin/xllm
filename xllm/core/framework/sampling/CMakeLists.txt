@@ -9,13 +9,11 @@ cc_library(
     logits_utils.h
     rejection_sampler.h
     sampler.h
-    beam_searcher.h
   SRCS
     sampling_params.cpp
     logits_utils.cpp
     rejection_sampler.cpp
     sampler.cpp
-    beam_searcher.cpp
   DEPS
     glog::glog
     torch

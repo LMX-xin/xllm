@@ -57,8 +57,8 @@ class LLMWorkerImpl : public WorkerImpl {
     model_->set_word_embedding(embedding);
   };
 
- private:
-  std::unique_ptr<BeamSearcher> beam_searcher_;
+  //  private:
+  //   std::unique_ptr<BeamSearcher> beam_searcher_;
 };
 
 }  // namespace xllm

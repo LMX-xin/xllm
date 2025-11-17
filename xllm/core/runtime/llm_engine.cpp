@@ -255,6 +255,11 @@ Engine::KVCacheCapacity LLMEngine::estimate_kv_cache_capacity() {
   } else {
     slot_size = 2 * dtype_size * head_dim_ * n_local_kv_heads_;
   }
+  int32_t max_decode_step = 3;
+  if (FLAGS_enable_beam_search_kernel) {
+    slot_size =
+        2 * dtype_size * max_decode_step * head_dim_ * n_local_kv_heads_;
+  }
   kv_cache_cap.slot_size = slot_size;
   kv_cache_cap.n_layers = args_.n_layers();
 
@@ -287,7 +292,7 @@ bool LLMEngine::allocate_kv_cache(const Engine::KVCacheCapacity& kv_cache_cap) {
 
   CHECK_GT(kv_cache_cap.n_blocks, 0) << "no memory for kv cache";
   const int32_t block_size = options_.block_size();
-
+  int32_t max_decode_step = 3;
   // init kv cache for each worker
   std::vector<std::vector<int64_t>> kv_cache_shape;
   kv_cache_shape.reserve(2);
@@ -298,10 +303,16 @@ bool LLMEngine::allocate_kv_cache(const Engine::KVCacheCapacity& kv_cache_cap) {
         kv_cache_cap.n_blocks, block_size, 1, args_.qk_rope_head_dim()});
   } else {
 #if defined(USE_NPU)
-    kv_cache_shape.emplace_back(std::vector<int64_t>{
-        kv_cache_cap.n_blocks, block_size, n_local_kv_heads_, head_dim_});
-    kv_cache_shape.emplace_back(std::vector<int64_t>{
-        kv_cache_cap.n_blocks, block_size, n_local_kv_heads_, head_dim_});
+    kv_cache_shape.emplace_back(std::vector<int64_t>{kv_cache_cap.n_blocks,
+                                                     block_size,
+                                                     n_local_kv_heads_,
+                                                     max_decode_step,
+                                                     head_dim_});
+    kv_cache_shape.emplace_back(std::vector<int64_t>{kv_cache_cap.n_blocks,
+                                                     block_size,
+                                                     n_local_kv_heads_,
+                                                     max_decode_step,
+                                                     head_dim_});
 #elif defined(USE_MLU)
     kv_cache_shape.emplace_back(std::vector<int64_t>{
         kv_cache_cap.n_blocks, n_local_kv_heads_, block_size, head_dim_});
@@ -677,6 +688,8 @@ ForwardOutput LLMEngine::step(std::vector<Batch>& batch) {
 
   assert(dp_size_ == worker_clients_num_ / dp_local_tp_size_);
   size_t dp_rank = 0;
+  // collect per-sequence token ids for direct decoding (optional fast path)
+  std::vector<std::vector<int32_t>> collected_step_tokens;
   for (auto worker_rank = 0; worker_rank < worker_clients_num_;
        worker_rank += dp_local_tp_size_) {
     auto result = results[worker_rank].value();
@@ -695,14 +708,53 @@ ForwardOutput LLMEngine::step(std::vector<Batch>& batch) {
       } else {
         batch[dp_rank].process_beam_search_output(result.value(), false);
       }
+      // Accumulate tokens from RawForwardOutput for direct decode path
+      for (const auto& one_seq : result.value().outputs) {
+        std::vector<int32_t> ids;
+        ids.reserve(one_seq.tokens.size());
+        for (const auto& tk : one_seq.tokens) {
+          ids.push_back(tk.id);
+        }
+        collected_step_tokens.push_back(std::move(ids));
+      }
     } else {
       LOG(FATAL) << "Failed to execute model, result has no value";
     }
     ++dp_rank;
   }
 
+  // If caller wants to decode text per step without building sequences,
+  // expose the step's generated tokens via
+  // ForwardOutput.sample_output.next_tokens
+  ForwardOutput out;
+  if (!collected_step_tokens.empty()) {
+    size_t max_len = 0;
+    for (const auto& v : collected_step_tokens) {
+      if (v.size() > max_len) max_len = v.size();
+    }
+    const int64_t B = static_cast<int64_t>(collected_step_tokens.size());
+    const int64_t T = static_cast<int64_t>(max_len);
+    auto dev = options_.devices().empty() ? torch::Device(torch::kCPU)
+                                          : options_.devices()[0];
+    auto opts_dev = torch::TensorOptions().dtype(torch::kInt64).device(dev);
+    auto next_tokens = torch::full({B, T}, static_cast<int64_t>(-1), opts_dev);
+    // Fill on CPU for simplicity, then move to device
+    auto next_cpu = next_tokens.to(torch::kCPU);
+    for (int64_t b = 0; b < B; ++b) {
+      const auto& seq = collected_step_tokens[b];
+      if (seq.empty()) continue;
+      auto row = next_cpu.index(
+          {b, torch::indexing::Slice(0, static_cast<int64_t>(seq.size()))});
+      auto src = torch::from_blob(const_cast<int32_t*>(seq.data()),
+                                  {static_cast<long>(seq.size())},
+                                  torch::TensorOptions().dtype(torch::kInt32));
+      row.copy_(src.to(torch::kInt64));
+    }
+    out.sample_output.next_tokens = next_cpu.to(dev).contiguous();
+  }
+
   COUNTER_ADD(engine_latency_seconds, timer.elapsed_seconds());
-  return {};
+  return out;
 }
 
 void LLMEngine::update_last_step_result(std::vector<Batch>& last_batch) {
