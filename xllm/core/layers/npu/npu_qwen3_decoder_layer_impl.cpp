@@ -653,7 +653,7 @@ void NpuQwen3DecoderLayerImpl::build_node_variant_pack(
   node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 13) =
       atb_speed::Utils::AtTensor2Tensor(input_params[0].beam_width_tensor);
   node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 14) =
-      atb_speed::Utils::AtTensor2Tensor(input_params[0].current_step_tensor);
+      atb_speed::Utils::AtTensor2Tensor(input_params[0].current_round_tensor);
 
   for (size_t i = 0; i < WEIGHT_COUNT_PER_LAYER; ++i) {
     CHECK_THROW(node.inTensors.at(i) == nullptr,

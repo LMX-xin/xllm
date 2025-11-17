@@ -50,6 +50,7 @@ struct CacheBlockInfo {
 struct ModelInputParams {
   ModelInputParams to(const torch::Device& device) const {
     ModelInputParams params;
+    params.is_prefill = is_prefill;
     params.empty_kv_cache = empty_kv_cache;
     params.global_empty_kv_cache = global_empty_kv_cache;
     params.num_sequences = num_sequences;
@@ -141,6 +142,9 @@ struct ModelInputParams {
   }
   // whether the kv-cache is empty for all sequences.
   bool empty_kv_cache = true;
+
+  // whether this pass is prefill stage
+  bool is_prefill = true;
 
   // total number of sequences in the batch
   int32_t num_sequences = 0;

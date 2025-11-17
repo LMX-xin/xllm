@@ -15,6 +15,8 @@ limitations under the License.
 
 #include "sequence_kv_state.h"
 
+#include "common/global_flags.h"
+
 namespace xllm {
 
 namespace {

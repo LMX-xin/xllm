@@ -279,6 +279,7 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
   for (int32_t round = 0; round <= total_rounds; ++round) {
     for (auto i = 0; i < input_params_micro_batches.size(); ++i) {
       auto& mip = input_params_micro_batches[i];
+      mip.is_prefill = round == 0;
       if (!mip.current_round_tensor_list.empty() && round >= 0 &&
           round < static_cast<int32_t>(mip.current_round_tensor_list.size())) {
         mip.current_round_tensor = mip.current_round_tensor_list[round];
@@ -315,7 +316,7 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
             {batch * beam_width, beam_width});
       }
 
-      auto beam_group_tuple = xllm_ops::beam_search_group((
+      auto beam_group_tuple = xllm_ops::beam_search_group(
           logits, top_tokens, top_logprobs, inputs.beam_sequence_group, round);
       auto& out_token_ids = std::get<0>(beam_group_tuple);
       auto& out_token_index = std::get<1>(beam_group_tuple);

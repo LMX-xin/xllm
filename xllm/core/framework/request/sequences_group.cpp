@@ -199,7 +199,7 @@ void SequencesGroup::process_beam_search() {
         if (static_cast<size_t>(b) < last_lps.size()) {
           new_token.logprob = last_lps[b];
         }
-        cloned->append_new_token(new_token);
+        cloned->append_token(new_token);
         result.emplace_back(std::move(cloned));
       }
       sequences_.swap(result);
@@ -328,6 +328,7 @@ void SequencesGroup::process_beam_search() {
 }
 
 }  // namespace xllm
+namespace xllm {
 void SequencesGroup::generate_multi_round_output(
     std::vector<SequenceOutput>& outputs,
     const Tokenizer& tokenizer,
