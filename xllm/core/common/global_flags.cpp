@@ -386,6 +386,8 @@ DEFINE_bool(enable_beam_search_kernel,
             false,
             "Whether to enable beam search kernel.");
 
+DEFINE_int32(beam_width, 1, "Beam width for beam search.");
+
 // --- multi-step decode config ---
 DEFINE_int32(max_decode_rounds,
              0,

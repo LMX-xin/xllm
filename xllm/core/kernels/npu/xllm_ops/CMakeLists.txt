@@ -16,7 +16,7 @@ cc_library(
     acltensor_utils.cpp
     beam_search.cpp
     cache_select.cpp
-    beam_search_group.h
+    beam_search_group.cpp
   DEPS
     atb
     torch_npu
