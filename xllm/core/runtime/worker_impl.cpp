@@ -458,7 +458,7 @@ void WorkerImpl::prepare_work_before_execute(
                             ? true
                             : false;
       // VLOG(1) << "worker impl is_prefill: " << is_prefill;
-      if (!is_prefill || GFLAGS_max_decoding_rounds > 0) {
+      if (!is_prefill || FLAGS_max_decode_rounds > 0) {
         auto& mip = fwd_inputs_on_device.input_params;
         int32_t beam_width = fwd_inputs_on_device.beam_width;
         int32_t current_round = fwd_inputs_on_device.current_round;
@@ -507,8 +507,6 @@ void WorkerImpl::prepare_work_before_execute(
   //
   processed_inputs.acc_logprob =
       inputs.acc_logprob.to(torch::kFloat32).to(device_);
-  processed_inputs.beam_sequence_group =
-      inputs.beam_sequence_group.to(torch::kInt32).to(device_);
   processed_inputs.beam_token_ids =
       inputs.beam_token_ids.to(torch::kInt32).to(device_);
   processed_inputs.beam_token_index =

@@ -237,7 +237,7 @@ struct BatchedForwardInputs {
   torch::Tensor concated_block_tables;
   // beam search batch-level tensors
   // IntTensor: [batch_size * beam_width, total_round]
-  torch::Tensor beam_sequence_group;
+  // torch::Tensor beam_sequence_group;
   // IntTensor: [batch_size * beam_width, 1]
   torch::Tensor beam_token_ids;
   // IntTensor: [batch_size * beam_width, 1]

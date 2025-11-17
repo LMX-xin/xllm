@@ -58,7 +58,7 @@ MultiStepBatchInputBuilder::MultiStepBatchInputBuilder(
                         args,
                         thread_pool) {
   // Initialize MultiStep specific state
-  multi_step_state_.total_steps = FLAGS_max_decoding_rounds;
+  multi_step_state_.total_steps = FLAGS_max_decode_rounds;
   // multi_step_state_.step_tokens_vec.reserve(1000);
   // multi_step_state_.step_positions_vec.reserve(1000);
   // TODO: Add multi-step specific initialization
@@ -117,8 +117,7 @@ void MultiStepBatchInputBuilder::process_single_sequence(
 
   // Call our enhanced method to process tokens and positions
   // This handles both regular decode and step-level decode cases
-  extract_tokens_and_positions(
-      sequence, n_kv_cache_tokens, seq_len, &base_state);
+  extract_tokens_and_positions(sequence, n_kv_cache_tokens, seq_len, &state);
 
   // not Setup KV cache for prefill
 

@@ -231,7 +231,7 @@ std::vector<Batch> FixStepsScheduler::prepare_batch() {
 
   // update the batch
   auto batches = BatchFactory::get_instance(options_.dp_size())
-                     ->create_rec_batches(
+                     ->create_batches(
                          running_requests_,
                          running_sequences_,
                          running_sequences_budgets_,

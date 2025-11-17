@@ -276,6 +276,14 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
     unshared_k_cache.push_back(kv_caches_[i].get_k_cache());
     unshared_v_cache.push_back(kv_caches_[i].get_v_cache());
   }
+  int32_t batch = input_params_micro_batches.empty()
+                      ? 0
+                      : input_params_micro_batches[0].num_sequences;
+  int32_t beam_width_init = inputs.micro_inputs[0].beam_width;
+  auto int_options =
+      torch::TensorOptions().dtype(torch::kInt32).device(device_);
+  torch::Tensor sequence_group =
+      torch::zeros({batch * beam_width_init, total_rounds}, int_options);
   for (int32_t round = 0; round <= total_rounds; ++round) {
     for (auto i = 0; i < input_params_micro_batches.size(); ++i) {
       auto& mip = input_params_micro_batches[i];
@@ -303,26 +311,25 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
       auto sample_output = sampler_->forward(logits, concated_sampling_params);
       torch::Tensor top_tokens;
       torch::Tensor top_logprobs;
+      int32_t beam_width = inputs.micro_inputs[0].beam_width;
 
       if (round == 0) {
-        top_tokens = sample_output.top_tokens.to(torch::kInt32)
-                         .reshape({batch * beam_width, 1});
-        top_logprobs =
-            sample_output.top_logprobs.reshape({batch * beam_width, 1});
+        top_tokens =
+            sample_output.top_tokens.to(torch::kInt32).reshape({-1, 1});
+        top_logprobs = sample_output.top_logprobs.reshape({-1, 1});
       } else {
         top_tokens = sample_output.top_tokens.to(torch::kInt32)
-                         .reshape({batch * beam_width, beam_width});
-        top_logprobs = sample_output.top_logprobs.reshape(
-            {batch * beam_width, beam_width});
+                         .reshape({-1, beam_width});
+        top_logprobs = sample_output.top_logprobs.reshape({-1, beam_width});
       }
 
       auto beam_group_tuple = xllm_ops::beam_search_group(
-          logits, top_tokens, top_logprobs, inputs.beam_sequence_group, round);
+          logits, top_tokens, top_logprobs, sequence_group, round);
       auto& out_token_ids = std::get<0>(beam_group_tuple);
       auto& out_token_index = std::get<1>(beam_group_tuple);
       auto& out_log_probs = std::get<2>(beam_group_tuple);
       auto& out_beam_count_prefix_sums = std::get<3>(beam_group_tuple);
-      latten_tokens_micro_batches[0] = out_token_ids;
+      flatten_tokens_micro_batches[0] = out_token_ids;
       if (round == total_rounds) {
         output.logits = logits;
         output.sample_output = sample_output;
@@ -333,20 +340,18 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
         output.beam_search_output.out_tokens = out_token_ids;
         output.beam_search_output.out_logprobs = out_log_probs;
         output.beam_search_output.group_offset = out_beam_count_prefix_sums;
-        output.beam_sequence_group = inputs.beam_sequence_group;
+        output.beam_sequence_group = sequence_group;
       }
 #if defined(USE_NPU)
-      int32_t beam_width = inputs.micro_inputs[0].beam_width;
       if (beam_width > 1 && round > 0) {
-        xllm_ops::cache_select(
-            out_token_ids,
-            unshared_k_cache,
-            unshared_v_cache,
-            input_params_micro_batches[0].concated_block_tables,
-            out_beam_count_prefix_sums,
-            round,
-            beam_width,
-            layer_num);
+        xllm_ops::cache_select(out_token_ids,
+                               unshared_k_cache,
+                               unshared_v_cache,
+                               inputs.concated_block_tables,
+                               out_beam_count_prefix_sums,
+                               round,
+                               beam_width,
+                               layer_num);
       }
 #endif
     }

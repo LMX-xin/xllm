@@ -365,3 +365,5 @@ void SequencesGroup::generate_multi_round_output(
     outputs.push_back(std::move(out));
   }
 }
+
+}  // namespace xllm

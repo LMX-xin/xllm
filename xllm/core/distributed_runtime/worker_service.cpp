@@ -377,8 +377,8 @@ void WorkerService::ExecuteModel(
         torch::TensorOptions().dtype(torch::kInt32).device(torch::kCPU);
     int64_t beam_sequences =
         static_cast<int64_t>(total_num_sequences) * beam_width;
-    batched_fwd_inputs.beam_sequence_group =
-        torch::zeros({beam_sequences, total_round}, int_options);
+    // batched_fwd_inputs.beam_sequence_group =
+    //     torch::zeros({beam_sequences, total_round}, int_options);
     batched_fwd_inputs.beam_token_ids =
         torch::zeros({beam_sequences, 1}, int_options);
     batched_fwd_inputs.beam_token_index =
@@ -552,17 +552,7 @@ void WorkerService::ExecuteModel(
                             out_tokens,
                             out_logprobs,
                             pb_forward_output);
-    // append batch-level beam output
-    {
-      const auto& bsg = safe_to(
-          forward_outputs.value().beam_sequence_group, torch::kCPU, true);
-      if (bsg.defined()) {
-        auto flat = bsg.flatten();
-        ADD_VECTOR_TO_PROTO(pb_forward_output->mutable_beam_sequence_group(),
-                            Slice<int32_t>{flat.data_ptr<int32_t>(),
-                                           static_cast<size_t>(flat.numel())});
-      }
-    }
+    // append batch-level beam output (skipped in immediate send path)
     COUNTER_ADD(worker_service_latency_seconds, timer.elapsed_seconds());
   });
 }
@@ -637,10 +627,11 @@ void WorkerService::GetLastStepResult(
                           true);
               if (bsg.defined()) {
                 auto flat = bsg.flatten();
+                std::vector<int32_t> flat_vec(
+                    flat.data_ptr<int32_t>(),
+                    flat.data_ptr<int32_t>() + flat.numel());
                 ADD_VECTOR_TO_PROTO(
-                    pb_forward_output->mutable_beam_sequence_group(),
-                    Slice<int32_t>{flat.data_ptr<int32_t>(),
-                                   static_cast<size_t>(flat.numel())});
+                    pb_forward_output->mutable_beam_sequence_group(), flat_vec);
               }
             }
           }
