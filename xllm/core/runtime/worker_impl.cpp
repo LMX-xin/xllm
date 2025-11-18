@@ -506,16 +506,39 @@ void WorkerImpl::prepare_work_before_execute(
   processed_inputs.concated_decoder_sampling_params =
       inputs.concated_decoder_sampling_params.to(device_, dtype_);
   //
-  processed_inputs.acc_logprob =
-      inputs.acc_logprob.to(torch::kFloat32).to(device_);
-  processed_inputs.beam_token_ids =
-      inputs.beam_token_ids.to(torch::kInt32).to(device_);
-  processed_inputs.beam_token_index =
-      inputs.beam_token_index.to(torch::kInt32).to(device_);
-  processed_inputs.beam_group_offset =
-      inputs.beam_group_offset.to(torch::kInt32).to(device_);
-  processed_inputs.concated_block_tables =
-      inputs.concated_block_tables.to(torch::kInt32).to(device_);
+  if (inputs.acc_logprob.defined() && inputs.acc_logprob.numel() > 0) {
+    processed_inputs.acc_logprob =
+        inputs.acc_logprob.to(torch::kFloat32).to(device_);
+  } else {
+    LOG(ERROR) << "[debug_1111] acc_logprob is undefined or empty";
+  }
+  if (inputs.beam_token_ids.defined() && inputs.beam_token_ids.numel() > 0) {
+    processed_inputs.beam_token_ids =
+        inputs.beam_token_ids.to(torch::kInt32).to(device_);
+  } else {
+    LOG(ERROR) << "[debug_1111] beam_token_ids is undefined or empty";
+  }
+  if (inputs.beam_token_index.defined() &&
+      inputs.beam_token_index.numel() > 0) {
+    processed_inputs.beam_token_index =
+        inputs.beam_token_index.to(torch::kInt32).to(device_);
+  } else {
+    LOG(ERROR) << "[debug_1111] beam_token_index is undefined or empty";
+  }
+  if (inputs.beam_group_offset.defined() &&
+      inputs.beam_group_offset.numel() > 0) {
+    processed_inputs.beam_group_offset =
+        inputs.beam_group_offset.to(torch::kInt32).to(device_);
+  } else {
+    LOG(ERROR) << "[debug_1111] beam_group_offset is undefined or empty";
+  }
+  if (inputs.concated_block_tables.defined() &&
+      inputs.concated_block_tables.numel() > 0) {
+    processed_inputs.concated_block_tables =
+        inputs.concated_block_tables.to(torch::kInt32).to(device_);
+  } else {
+    LOG(ERROR) << "[debug_1111] concated_block_tables is undefined or empty";
+  }
   auto ret = prepare_stream_->synchronize();
   LOG(INFO) << "[debug_1111] end call prepare_work_before_execute";
 }
