@@ -57,8 +57,8 @@ class BatchInputBuilder {
   void process_sequences_multithreaded(uint32_t start_idx, uint32_t end_idx);
   void padding_decode_batch_size(uint32_t num_decoding_tokens,
                                  uint32_t min_decoding_batch_size);
-  ForwardInput state_to_forward_input();
-  RawForwardInput state_to_raw_forward_input();
+  virtual ForwardInput state_to_forward_input();
+  virtual RawForwardInput state_to_raw_forward_input();
 
   void process_swap_block_infos(RawForwardInput& raw_forward_input);
 
@@ -110,7 +110,7 @@ class BatchInputBuilder {
   };
 
   // Helper methods for sequence processing
-  void process_single_sequence(
+  virtual void process_single_sequence(
       int32_t seq_index,
       BuilderState* state_ptr = nullptr,
       std::unordered_set<int32_t>* write_block_ids_ptr = nullptr);
@@ -125,18 +125,19 @@ class BatchInputBuilder {
       uint32_t seq_len,
       std::unordered_map<int32_t, int32_t>& adjusted_counts,
       BuilderState* state_ptr = nullptr);
-  void setup_kv_cache_info(
+  virtual void setup_kv_cache_info(
       Sequence* sequence,
       uint32_t n_kv_cache_tokens,
       uint32_t seq_len,
       uint32_t q_seq_len,
       BuilderState* state_ptr = nullptr,
       std::unordered_set<int32_t>* write_block_ids_ptr = nullptr);
-  void setup_continuous_kv_cache_info(Sequence* sequence,
-                                      uint32_t n_kv_cache_tokens,
-                                      uint32_t seq_len,
-                                      uint32_t q_seq_len,
-                                      BuilderState* state_ptr = nullptr);
+  virtual void setup_continuous_kv_cache_info(
+      Sequence* sequence,
+      uint32_t n_kv_cache_tokens,
+      uint32_t seq_len,
+      uint32_t q_seq_len,
+      BuilderState* state_ptr = nullptr);
 
   // Input data
   const std::vector<Sequence*>& sequences_;

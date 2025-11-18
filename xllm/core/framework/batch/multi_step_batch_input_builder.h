@@ -56,7 +56,7 @@ class MultiStepBatchInputBuilder : public BatchInputBuilder {
   void process_single_sequence(
       int32_t seq_index,
       BatchInputBuilder::BuilderState* state_ptr = nullptr,
-      std::unordered_set<int32_t>* write_block_ids_ptr = nullptr);
+      std::unordered_set<int32_t>* write_block_ids_ptr = nullptr) override;
 
  private:
   // State management for MultiStep
@@ -103,21 +103,23 @@ class MultiStepBatchInputBuilder : public BatchInputBuilder {
                                     MultiStepBuilderState* state_ptr);
 
   // Multi-step specific forward input conversion functions
-  ForwardInput state_to_forward_input();
-  RawForwardInput state_to_raw_forward_input();
+  ForwardInput state_to_forward_input() override;
+  RawForwardInput state_to_raw_forward_input() override;
 
-  void setup_kv_cache_info(Sequence* sequence,
-                           uint32_t n_kv_cache_tokens,
-                           uint32_t seq_len,
-                           uint32_t q_seq_len,
-                           BatchInputBuilder::BuilderState* state_ptr,
-                           std::unordered_set<int32_t>* write_block_ids_ptr);
+  void setup_kv_cache_info(
+      Sequence* sequence,
+      uint32_t n_kv_cache_tokens,
+      uint32_t seq_len,
+      uint32_t q_seq_len,
+      BatchInputBuilder::BuilderState* state_ptr,
+      std::unordered_set<int32_t>* write_block_ids_ptr) override;
 
-  void setup_continuous_kv_cache_info(Sequence* sequence,
-                                      uint32_t n_kv_cache_tokens,
-                                      uint32_t seq_len,
-                                      uint32_t q_seq_len,
-                                      BatchInputBuilder::BuilderState* state_ptr);
+  void setup_continuous_kv_cache_info(
+      Sequence* sequence,
+      uint32_t n_kv_cache_tokens,
+      uint32_t seq_len,
+      uint32_t q_seq_len,
+      BatchInputBuilder::BuilderState* state_ptr) override;
 };
 
 }  // namespace xllm

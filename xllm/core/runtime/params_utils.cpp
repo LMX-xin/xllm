@@ -895,6 +895,13 @@ void forward_output_to_proto(const torch::Tensor& next_tokens,
         static_cast<size_t>(src_seq_idxes.numel())};
     ADD_VECTOR_TO_PROTO(pb_forward_output->mutable_src_seq_idxes(),
                         src_seq_idxes_slice);
+  } else {
+    auto opts = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCPU);
+    auto fallback = torch::arange(num_seqs, opts);
+    Slice<int32_t> src_seq_idxes_slice = {
+        fallback.data_ptr<int32_t>(), static_cast<size_t>(fallback.numel())};
+    ADD_VECTOR_TO_PROTO(pb_forward_output->mutable_src_seq_idxes(),
+                        src_seq_idxes_slice);
   }
   if (out_tokens.defined() && out_tokens.numel() > 0) {
     Slice<int32_t> out_tokens_slice = {out_tokens.data_ptr<int32_t>(),

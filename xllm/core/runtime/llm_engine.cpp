@@ -962,9 +962,7 @@ std::vector<std::vector<RawForwardInput>> LLMEngine::prepare_inputs(
       if (FLAGS_max_decode_rounds > 0) {
         batched_inputs[dp_rank].push_back(
             std::move(batch[dp_rank].prepare_multi_step_forward_input(
-                split_seq_index[i],
-                split_seq_index[i + 1],
-                threadpool_.get())));
+                split_seq_index[i], split_seq_index[i + 1])));
       } else {
         batched_inputs[dp_rank].push_back(std::move(
             batch[dp_rank].prepare_forward_input(split_seq_index[i],

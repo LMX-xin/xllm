@@ -804,14 +804,27 @@ RawForwardInput BatchInputBuilder::state_to_raw_forward_input() {
   if (mm_data_vec_.size() != 0) {
     MMData mm_data = MMData::batch(mm_data_vec_);
     const auto& res = mm_data.get<torch::Tensor>("embedding");
-    if (res) {
+    if (res && res.value().defined()) {
       torch::Tensor embeddings = res.value();
-      for (int64_t output_idx = 0; output_idx < embeddings.size(0);
-           ++output_idx) {
-        torch::Tensor embedding = embeddings[output_idx].to(torch::kFloat32);
-        Slice<float> embedding_slice = {embedding.data_ptr<float>(),
-                                        embedding.size(0)};
-        raw_forward_input.embeddings.push_back(embedding_slice);
+      if (embeddings.dim() == 1) {
+        if (embeddings.defined() && embeddings.numel() > 0) {
+          torch::Tensor embedding = embeddings.to(torch::kFloat32);
+          Slice<float> embedding_slice = {embedding.data_ptr<float>(),
+                                          embedding.size(0)};
+          raw_forward_input.embeddings.push_back(embedding_slice);
+        }
+      } else if (embeddings.dim() >= 2) {
+        for (int64_t output_idx = 0; output_idx < embeddings.size(0);
+             ++output_idx) {
+          torch::Tensor embedding = embeddings[output_idx];
+          if (!embedding.defined() || embedding.numel() == 0) {
+            continue;
+          }
+          embedding = embedding.to(torch::kFloat32);
+          Slice<float> embedding_slice = {embedding.data_ptr<float>(),
+                                          embedding.size(0)};
+          raw_forward_input.embeddings.push_back(embedding_slice);
+        }
       }
     }
   }

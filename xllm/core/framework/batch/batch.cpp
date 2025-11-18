@@ -109,7 +109,7 @@ RawForwardInput Batch::prepare_multi_step_forward_input(
                                      copy_out_cache_block_infos_,
                                      swap_cache_block_infos_,
                                      nullptr,
-                                     thread_pool);
+                                     nullptr);
   return builder.build_raw_forward_input(start_idx, end_idx);
 }
 

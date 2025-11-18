@@ -239,6 +239,7 @@ ForwardInput MultiStepBatchInputBuilder::state_to_forward_input() {
 
   // Add multi-step specific data using existing ForwardInput fields
   auto& multi_step_state = multi_step_state_;
+  multi_step_state.total_steps = FLAGS_max_decode_rounds;
 
   // Set step-level decode metadata for multi-step processing
   // These fields are already present in ForwardInput for step-level decode
@@ -284,6 +285,7 @@ RawForwardInput MultiStepBatchInputBuilder::state_to_raw_forward_input() {
 
   // Add multi-step specific data using existing RawForwardInput fields
   auto& multi_step_state = multi_step_state_;
+  multi_step_state.total_steps = FLAGS_max_decode_rounds;
 
   // Set step-level decode metadata for multi-step processing
   raw_forward_input.beam_width = FLAGS_beam_width;
