@@ -755,8 +755,8 @@ ForwardInput BatchInputBuilder::state_to_forward_input() {
 }
 
 RawForwardInput BatchInputBuilder::state_to_raw_forward_input(
-    BuilderState* state_ptr) {
-  BuilderState& src = state_ptr ? *state_ptr : state_;
+    BatchInputBuilder::BuilderState* state_ptr) {
+  BatchInputBuilder::BuilderState& src = state_ptr ? *state_ptr : state_;
   if (src.flatten_tokens_vec.empty()) {
     return {};
   }

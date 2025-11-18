@@ -51,18 +51,6 @@ class BatchInputBuilder {
 
   RawForwardInput build_raw_forward_input(uint32_t start_idx, uint32_t end_idx);
 
- protected:
-  // Core building methods
-  void process_sequences(uint32_t start_idx, uint32_t end_idx);
-  void process_sequences_multithreaded(uint32_t start_idx, uint32_t end_idx);
-  void padding_decode_batch_size(uint32_t num_decoding_tokens,
-                                 uint32_t min_decoding_batch_size);
-  virtual ForwardInput state_to_forward_input();
-  virtual RawForwardInput state_to_raw_forward_input(
-      BuilderState* state_ptr = nullptr);
-
-  void process_swap_block_infos(RawForwardInput& raw_forward_input);
-
   // State management
   struct BuilderState {
     // Token and position data
@@ -109,6 +97,20 @@ class BatchInputBuilder {
     std::vector<int64_t> new_cache_slot_offsets;  //[n_tokens]
     std::vector<int64_t> kv_cache_start_offsets;  //[n_seq]
   };
+
+ protected:
+  // Core building methods
+  void process_sequences(uint32_t start_idx, uint32_t end_idx);
+  void process_sequences_multithreaded(uint32_t start_idx, uint32_t end_idx);
+  void padding_decode_batch_size(uint32_t num_decoding_tokens,
+                                 uint32_t min_decoding_batch_size);
+  virtual ForwardInput state_to_forward_input();
+  virtual RawForwardInput state_to_raw_forward_input(
+      BuilderState* state_ptr = nullptr);
+
+  void process_swap_block_infos(RawForwardInput& raw_forward_input);
+
+  // State management
 
   // Helper methods for sequence processing
   virtual void process_single_sequence(
