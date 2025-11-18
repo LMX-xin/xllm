@@ -68,7 +68,6 @@ void MultiStepBatchInputBuilder::process_single_sequence(
     int32_t seq_index,
     BatchInputBuilder::BuilderState* state_ptr,
     std::unordered_set<int32_t>* write_block_ids_ptr) {
-  // 三合一只会调 process_single_sequence，所以这里不需要判断 state_ptr 是否为空
   MultiStepBuilderState& state = multi_step_state_;
   BatchInputBuilder::BuilderState& base_state = state.base_state;
 
@@ -278,11 +277,13 @@ ForwardInput MultiStepBatchInputBuilder::state_to_forward_input() {
   return forward_input;
 }
 
-RawForwardInput MultiStepBatchInputBuilder::state_to_raw_forward_input() {
+RawForwardInput MultiStepBatchInputBuilder::state_to_raw_forward_input(
+    BatchInputBuilder::BuilderState* state_ptr) {
   // First call the base class implementation to get the basic RawForwardInput
   LOG(INFO) << "[debug_1111] begin call multistep state_to_raw_forward_input";
   RawForwardInput raw_forward_input =
-      BatchInputBuilder::state_to_raw_forward_input();
+      BatchInputBuilder::state_to_raw_forward_input(
+          state_ptr ? state_ptr : &multi_step_state_.base_state);
 
   // Add multi-step specific data using existing RawForwardInput fields
   auto& multi_step_state = multi_step_state_;

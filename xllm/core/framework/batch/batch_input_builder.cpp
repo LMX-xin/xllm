@@ -102,7 +102,7 @@ RawForwardInput BatchInputBuilder::build_raw_forward_input(uint32_t start_idx,
   } else {
     process_sequences_multithreaded(start_idx, end_idx);
   }
-  return state_to_raw_forward_input();
+  return state_to_raw_forward_input(nullptr);
 }
 
 void BatchInputBuilder::process_sequences(uint32_t start_idx,
@@ -754,51 +754,51 @@ ForwardInput BatchInputBuilder::state_to_forward_input() {
   return forward_input;
 }
 
-RawForwardInput BatchInputBuilder::state_to_raw_forward_input() {
-  if (state_.flatten_tokens_vec.empty()) {
+RawForwardInput BatchInputBuilder::state_to_raw_forward_input(
+    BuilderState* state_ptr) {
+  BuilderState& src = state_ptr ? *state_ptr : state_;
+  if (src.flatten_tokens_vec.empty()) {
     return {};
   }
   RawForwardInput raw_forward_input;
   VLOG(1) << "[SEL/RAW] selected_token_idxes.size(before move)="
-          << state_.selected_token_idxes.size();
-  raw_forward_input.flatten_tokens_vec = std::move(state_.flatten_tokens_vec);
+          << src.selected_token_idxes.size();
+  raw_forward_input.flatten_tokens_vec = std::move(src.flatten_tokens_vec);
   raw_forward_input.flatten_positions_vec =
-      std::move(state_.flatten_positions_vec);
-  raw_forward_input.sampling_params = std::move(state_.sampling_params);
-  raw_forward_input.selected_token_idxes =
-      std::move(state_.selected_token_idxes);
-  raw_forward_input.sample_idxes = std::move(state_.sample_idxes);
-  raw_forward_input.unique_token_ids_vec =
-      std::move(state_.unique_token_ids_vec);
+      std::move(src.flatten_positions_vec);
+  raw_forward_input.sampling_params = std::move(src.sampling_params);
+  raw_forward_input.selected_token_idxes = std::move(src.selected_token_idxes);
+  raw_forward_input.sample_idxes = std::move(src.sample_idxes);
+  raw_forward_input.unique_token_ids_vec = std::move(src.unique_token_ids_vec);
   raw_forward_input.unique_token_counts_vec =
-      std::move(state_.unique_token_counts_vec);
+      std::move(src.unique_token_counts_vec);
   raw_forward_input.unique_token_lens_vec =
-      std::move(state_.unique_token_lens_vec);
-  raw_forward_input.empty_kv_cache = state_.empty_kv_cache;
+      std::move(src.unique_token_lens_vec);
+  raw_forward_input.empty_kv_cache = src.empty_kv_cache;
   // raw_forward_input.global_empty_kv_cache = ;
-  raw_forward_input.max_seq_len = state_.max_seq_len;
-  raw_forward_input.q_max_seq_len = state_.q_max_seq_len;
-  raw_forward_input.seq_lens = std::move(state_.seq_lens);
-  raw_forward_input.q_seq_lens = std::move(state_.q_seq_lens);
-  raw_forward_input.new_token_slot_ids = std::move(state_.new_token_slot_ids);
-  raw_forward_input.block_tables_vec = std::move(state_.block_tables_vec);
+  raw_forward_input.max_seq_len = src.max_seq_len;
+  raw_forward_input.q_max_seq_len = src.q_max_seq_len;
+  raw_forward_input.seq_lens = std::move(src.seq_lens);
+  raw_forward_input.q_seq_lens = std::move(src.q_seq_lens);
+  raw_forward_input.new_token_slot_ids = std::move(src.new_token_slot_ids);
+  raw_forward_input.block_tables_vec = std::move(src.block_tables_vec);
   raw_forward_input.num_sequences = num_sequences_;
   // raw_forward_input.dp_global_token_nums = ;
-  raw_forward_input.transfer_kv_infos = std::move(state_.transfer_kv_infos);
-  raw_forward_input.prefill_seq_len = state_.prefill_seq_len;
+  raw_forward_input.transfer_kv_infos = std::move(src.transfer_kv_infos);
+  raw_forward_input.prefill_seq_len = src.prefill_seq_len;
 
-  raw_forward_input.embedding_ids = std::move(state_.embedding_ids);
-  raw_forward_input.extra_token_ids = std::move(state_.extra_token_ids);
+  raw_forward_input.embedding_ids = std::move(src.embedding_ids);
+  raw_forward_input.extra_token_ids = std::move(src.extra_token_ids);
   // beam search kernel input
-  if (state_.acc_logprob_vec.size() > 0) {
-    raw_forward_input.acc_logprob_vec = std::move(state_.acc_logprob_vec);
+  if (src.acc_logprob_vec.size() > 0) {
+    raw_forward_input.acc_logprob_vec = std::move(src.acc_logprob_vec);
   }
 
   if (FLAGS_enable_continuous_kvcache) {
     raw_forward_input.new_cache_slot_offsets =
-        std::move(state_.new_cache_slot_offsets);
+        std::move(src.new_cache_slot_offsets);
     raw_forward_input.kv_cache_start_offsets =
-        std::move(state_.kv_cache_start_offsets);
+        std::move(src.kv_cache_start_offsets);
   }
 
   if (mm_data_vec_.size() != 0) {

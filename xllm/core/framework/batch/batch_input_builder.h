@@ -58,7 +58,8 @@ class BatchInputBuilder {
   void padding_decode_batch_size(uint32_t num_decoding_tokens,
                                  uint32_t min_decoding_batch_size);
   virtual ForwardInput state_to_forward_input();
-  virtual RawForwardInput state_to_raw_forward_input();
+  virtual RawForwardInput state_to_raw_forward_input(
+      BuilderState* state_ptr = nullptr);
 
   void process_swap_block_infos(RawForwardInput& raw_forward_input);
 

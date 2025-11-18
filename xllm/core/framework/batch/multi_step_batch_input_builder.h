@@ -104,7 +104,8 @@ class MultiStepBatchInputBuilder : public BatchInputBuilder {
 
   // Multi-step specific forward input conversion functions
   ForwardInput state_to_forward_input() override;
-  RawForwardInput state_to_raw_forward_input() override;
+  RawForwardInput state_to_raw_forward_input(
+      BatchInputBuilder::BuilderState* state_ptr = nullptr) override;
 
   void setup_kv_cache_info(
       Sequence* sequence,
