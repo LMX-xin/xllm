@@ -250,11 +250,6 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
   std::vector<torch::Tensor> flatten_tokens_micro_batches;
   std::vector<torch::Tensor> flatten_positions_micro_batches;
   std::vector<ModelInputParams> input_params_micro_batches;
-  const auto& concated_sampling_params =
-      inputs.concated_decoder_sampling_params.selected_token_idxes.defined()
-          ? inputs.concated_decoder_sampling_params
-          : inputs.concated_sampling_params;
-
   std::vector<folly::SemiFuture<bool>> futures;
 
   for (auto i = 0; i < inputs.micro_inputs.size(); ++i) {
@@ -287,6 +282,9 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
       torch::zeros({batch * beam_width_init, total_rounds}, int_options);
   for (int32_t round = 0; round <= total_rounds; ++round) {
     LOG(INFO) << "[debug_1111] begin run for, round: " << round;
+    const auto& concated_sampling_params =
+        round > 0 ? inputs.concated_decoder_sampling_params
+                  : inputs.concated_sampling_params;
     for (auto i = 0; i < input_params_micro_batches.size(); ++i) {
       auto& mip = input_params_micro_batches[i];
       mip.is_prefill = round == 0;
@@ -332,7 +330,7 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
       LOG(INFO) << "[debug_1111] begin run beam_search_group, round: " << round;
 
       auto beam_group_tuple = xllm_ops::beam_search_group(
-          logits, top_tokens, top_logprobs, sequence_group, round);
+          inputs.acc_logprob, top_tokens, top_logprobs, sequence_group, round);
       auto& out_token_ids = std::get<0>(beam_group_tuple);
       auto& out_token_index = std::get<1>(beam_group_tuple);
       auto& out_log_probs = std::get<2>(beam_group_tuple);
