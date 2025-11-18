@@ -100,6 +100,7 @@ RawForwardInput Batch::prepare_forward_input(uint32_t start_idx,
 RawForwardInput Batch::prepare_multi_step_forward_input(
     uint32_t start_idx,
     uint32_t end_idx,
+    const ModelArgs* args,
     ThreadPool* thread_pool) {
   MultiStepBatchInputBuilder builder(sequences_,
                                      allowed_max_tokens_,
@@ -108,8 +109,8 @@ RawForwardInput Batch::prepare_multi_step_forward_input(
                                      copy_in_cache_block_infos_,
                                      copy_out_cache_block_infos_,
                                      swap_cache_block_infos_,
-                                     nullptr,
-                                     nullptr);
+                                     args,
+                                     thread_pool);
   return builder.build_raw_forward_input(start_idx, end_idx);
 }
 

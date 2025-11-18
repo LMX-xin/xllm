@@ -81,6 +81,7 @@ class Batch {
   RawForwardInput prepare_multi_step_forward_input(
       uint32_t start_idx,
       uint32_t end_idx,
+      const ModelArgs* args,
       ThreadPool* thread_pool = nullptr);
 
   // process output

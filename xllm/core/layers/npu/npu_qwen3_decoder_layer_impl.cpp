@@ -558,7 +558,7 @@ void NpuQwen3DecoderLayerImpl::build_node_variant_pack(
   node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 8) = placeholder_;
   node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 9) =
       atb_speed::Utils::AtTensor2Tensor(input_params[0].block_tables);
-  if (!is_prefill) {
+  if (!is_prefill || FLAGS_max_decode_rounds > 0) {
     node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 10) = placeholder_;
   } else {
     node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 10) =
