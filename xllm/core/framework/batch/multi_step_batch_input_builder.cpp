@@ -280,6 +280,7 @@ ForwardInput MultiStepBatchInputBuilder::state_to_forward_input() {
 
 RawForwardInput MultiStepBatchInputBuilder::state_to_raw_forward_input() {
   // First call the base class implementation to get the basic RawForwardInput
+  LOG(INFO) << "[debug_1111] begin call multistep state_to_raw_forward_input";
   RawForwardInput raw_forward_input =
       BatchInputBuilder::state_to_raw_forward_input();
 
@@ -343,7 +344,7 @@ RawForwardInput MultiStepBatchInputBuilder::state_to_raw_forward_input() {
         multi_step_state.decode_sampling_params.begin(),
         multi_step_state.decode_sampling_params.end());
   }
-
+  LOG(INFO) << "[debug_1111] end call multistep state_to_raw_forward_input";
   return raw_forward_input;
 }
 

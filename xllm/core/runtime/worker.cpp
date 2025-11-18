@@ -121,6 +121,8 @@ Worker::estimate_kv_cache_capacity_async() {
 
 folly::SemiFuture<std::optional<ForwardOutput>> Worker::step_async(
     const BatchedForwardInputs& inputs) {
+  LOG(INFO) << "[debug_1111] Worker Method step_async with "
+               "BatchedForwardInputs param is UnImplemented.";
   return impl_->step_async(inputs);
 }
 

@@ -368,6 +368,7 @@ ForwardInput WorkerImpl::update_input_by_last_step_output(
 void WorkerImpl::prepare_work_before_execute(
     const BatchedForwardInputs& inputs,
     BatchedForwardInputs& processed_inputs) {
+  LOG(INFO) << "[debug_1111] begin call prepare_work_before_execute";
   c10::StreamGuard streamGuard = prepare_stream_->set_stream_guard();
 
   for (auto i = 0; i < inputs.micro_inputs.size(); ++i) {
@@ -516,6 +517,7 @@ void WorkerImpl::prepare_work_before_execute(
   processed_inputs.concated_block_tables =
       inputs.concated_block_tables.to(torch::kInt32).to(device_);
   auto ret = prepare_stream_->synchronize();
+  LOG(INFO) << "[debug_1111] end call prepare_work_before_execute";
 }
 
 folly::SemiFuture<bool> WorkerImpl::copy_out_blocks_async(
@@ -553,6 +555,8 @@ folly::SemiFuture<bool> WorkerImpl::copy_out_blocks_async(
 
 folly::SemiFuture<std::optional<ForwardOutput>> WorkerImpl::step_async(
     const BatchedForwardInputs& inputs) {
+  LOG(INFO) << "[debug_1111] WorkerImpl Method step_async with "
+               "BatchedForwardInputs param is UnImplemented.";
   BatchedForwardInputs batched_inputs_on_device;
   batched_inputs_on_device.micro_inputs.reserve(inputs.micro_inputs.size());
 
