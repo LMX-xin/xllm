@@ -341,14 +341,14 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
       torch::Tensor out_token_ids = torch::empty(
           {num_seq, 1}, inputs.acc_logprob.options().dtype(torch::kInt32));
       torch::Tensor out_token_index = torch::empty(
-          {num_seq, 1}, inputs.acc_logprob.options().dtype(torch::kFloat32));
-      torch::Tensor out_log_probs = torch::empty(
           {num_seq, 1}, inputs.acc_logprob.options().dtype(torch::kInt32));
+      torch::Tensor out_log_probs = torch::empty(
+          {num_seq, 1}, inputs.acc_logprob.options().dtype(torch::kFloat32));
       torch::Tensor out_beam_count_prefix_sums = torch::empty(
           {num_seq, 1}, inputs.acc_logprob.options().dtype(torch::kInt32));
       auto out_seqgroup = sequence_group.clone();
 
-      xllm_ops::beam_search(inputs.acc_logprob,
+      xllm_ops::beam_search(inputs.acc_logprob.reshape({-1, 1}),
                             top_tokens,
                             top_logprobs,
                             sequence_group,
