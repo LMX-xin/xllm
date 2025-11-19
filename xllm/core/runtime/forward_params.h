@@ -103,6 +103,7 @@ struct ForwardInput {
     inputs.current_round = current_round;
     inputs.total_round = total_round;
     inputs.shared_kv_shape = shared_kv_shape;
+    inputs.decode_positions_vec = decode_positions_vec;
     return inputs;
   }
   // flatten token ids
@@ -117,6 +118,7 @@ struct ForwardInput {
   EplbInfo eplb_info;
   // beam search kernel input
   torch::Tensor acc_logprob;
+  std::vector<int32_t> decode_positions_vec;
   // step-level decode metadata (scheme A)
   int32_t beam_width = 1;
   int32_t current_round = 0;
@@ -203,6 +205,7 @@ struct RawForwardInput {
   std::vector<int64_t> kv_cache_start_offsets;  //[n_seq]
   // beam search kernel input
   std::vector<float> acc_logprob_vec;
+  std::vector<int32_t> decode_positions_vec;
   // step-level decode metadata (scheme A)
   int32_t beam_width = 1;
   int32_t current_round = 0;

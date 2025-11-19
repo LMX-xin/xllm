@@ -179,6 +179,9 @@ void MultiStepBatchInputBuilder::extract_tokens_and_positions(
   // 以下需要配套构造 sample_params ，在param_utils.cpp 中
   // proto_to_forward_input 中使用 因为每个 request 的 每个 sequence
   // 都一样，所以decode 可以只传一份，在 worker 端进行broadcast.
+  uint32_t prompt_len = sequence->num_prompt_tokens();
+  state_ptr->decode_positions_vec.push_back(static_cast<int32_t>(prompt_len));
+
   int32_t bw = std::max(1, FLAGS_beam_width);
   const int32_t sel_start =
       static_cast<int32_t>(state_ptr->decode_selected_token_idxes.size());
@@ -274,6 +277,10 @@ ForwardInput MultiStepBatchInputBuilder::state_to_forward_input() {
         multi_step_state.decode_q_seq_lens;
   }
 
+  if (!multi_step_state.decode_positions_vec.empty()) {
+    forward_input.decode_positions_vec = multi_step_state.decode_positions_vec;
+  }
+
   return forward_input;
 }
 
@@ -316,6 +323,13 @@ RawForwardInput MultiStepBatchInputBuilder::state_to_raw_forward_input(
         raw_forward_input.decode_q_seq_lens.end(),
         multi_step_state.decode_q_seq_lens.begin(),
         multi_step_state.decode_q_seq_lens.end());
+  }
+
+  if (!multi_step_state.decode_positions_vec.empty()) {
+    raw_forward_input.decode_positions_vec.insert(
+        raw_forward_input.decode_positions_vec.end(),
+        multi_step_state.decode_positions_vec.begin(),
+        multi_step_state.decode_positions_vec.end());
   }
 
   // append multi-step decode state into raw_forward_input

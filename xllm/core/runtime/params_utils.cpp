@@ -69,6 +69,9 @@ void proto_to_forward_input(const proto::ForwardInput* pb_forward_input,
   std::vector<int32_t> decode_q_seq_lens =
       std::vector<int32_t>(pb_forward_input->decode_q_seq_lens().begin(),
                            pb_forward_input->decode_q_seq_lens().end());
+  std::vector<int32_t> decode_positions_vec =
+      std::vector<int32_t>(pb_forward_input->decode_positions_vec().begin(),
+                           pb_forward_input->decode_positions_vec().end());
   // aprint<int32_t>(q_seq_lens, "q_seq_lens", global_rank_);
   std::vector<std::vector<int32_t>> block_tables_vec;
   for (size_t i = 0; i < pb_forward_input->block_tables_vec().size(); ++i) {
@@ -297,6 +300,7 @@ void proto_to_forward_input(const proto::ForwardInput* pb_forward_input,
   forward_inputs.acc_logprob = torch::tensor(
       acc_logprob_vec,
       torch::dtype(torch::kFloat32).device(torch::kCPU).pinned_memory(true));
+  forward_inputs.decode_positions_vec = std::move(decode_positions_vec);
   std::pair<int, int> decode_seq_range{0, 0};
 #if defined(USE_NPU)
   if (q_seq_lens.size() >= 1) {
@@ -579,6 +583,8 @@ void forward_input_to_proto(const RawForwardInput& inputs,
                       inputs.decode_seq_lens);
   ADD_VECTOR_TO_PROTO(pb_forward_input->mutable_decode_q_seq_lens(),
                       inputs.decode_q_seq_lens);
+  ADD_VECTOR_TO_PROTO(pb_forward_input->mutable_decode_positions_vec(),
+                      inputs.decode_positions_vec);
   ADD_VECTOR_TO_PROTO(pb_forward_input->mutable_new_token_slot_ids(),
                       inputs.new_token_slot_ids);
   pb_forward_input->mutable_block_tables_vec()->Reserve(

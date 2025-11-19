@@ -202,6 +202,7 @@ message BlockPair {
     int32 total_round = 48;
     repeated int32  decode_seq_lens = 49;
     repeated int32  decode_q_seq_lens = 50;
+    repeated int32  decode_positions_vec = 51;
 
   // optional decode-only sampling meta
   repeated RequestSamplingParam decode_sampling_params = 42;

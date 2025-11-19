@@ -280,7 +280,7 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
       torch::TensorOptions().dtype(torch::kInt32).device(device_);
   torch::Tensor sequence_group =
       torch::zeros({batch * beam_width_init, total_rounds}, int_options);
-  for (int32_t round = 0; round <= total_rounds; ++round) {
+  for (int32_t round = 0; round < total_rounds; ++round) {
     LOG(INFO) << "[debug_1111] begin run for, round: " << round;
     const auto& concated_sampling_params =
         round > 0 ? inputs.concated_decoder_sampling_params
@@ -335,8 +335,21 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
       auto& out_token_index = std::get<1>(beam_group_tuple);
       auto& out_log_probs = std::get<2>(beam_group_tuple);
       auto& out_beam_count_prefix_sums = std::get<3>(beam_group_tuple);
+      // update next round tokens.
       flatten_tokens_micro_batches[0] = out_token_ids;
-      if (round == total_rounds) {
+      // update next round positions.
+      flatten_positions_micro_batches.clear();
+      for (auto i = 0; i < inputs.micro_inputs.size(); ++i) {
+        auto& mip = input_params_micro_batches[i];
+        if (!mip.decode_positions_tensor_list.empty() && round >= 0 &&
+            round <
+                static_cast<int32_t>(mip.decode_positions_tensor_list.size())) {
+          flatten_positions_micro_batches.push_back(
+              mip.decode_positions_tensor_list[round]);
+        }
+      }
+      // update output at the last round.
+      if (round == total_rounds - 1) {
         output.logits = logits;
         output.sample_output = sample_output;
         output.do_sample = concated_sampling_params.do_sample;
@@ -348,6 +361,7 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
         output.beam_search_output.group_offset = out_beam_count_prefix_sums;
         output.beam_sequence_group = sequence_group;
       }
+
 #if defined(USE_NPU)
       if (beam_width > 1 && round > 0) {
         LOG(INFO) << "[debug_1111] begin run cache_select, round: " << round;

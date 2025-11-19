@@ -465,6 +465,7 @@ void WorkerImpl::prepare_work_before_execute(
         int32_t current_round = fwd_inputs_on_device.current_round;
         int32_t total_round = fwd_inputs_on_device.total_round;
         const auto& shape = fwd_inputs_on_device.shared_kv_shape;
+
         if (shape.size() == 3) {
           int64_t num_tokens = shape[0];
           int64_t head_num = shape[1];
@@ -495,6 +496,25 @@ void WorkerImpl::prepare_work_before_execute(
           }
 
           // beam batch-level tensors are constructed in WorkerService
+        }
+        {
+          auto int_options =
+              torch::TensorOptions().dtype(torch::kInt32).device(device_);
+          const auto& dec_pos = fwd_inputs_on_device.decode_positions_vec;
+          mip.decode_positions_tensor_list.clear();
+          if (!dec_pos.empty() && beam_width > 0 && total_round > 1) {
+            const int32_t n = static_cast<int32_t>(dec_pos.size());
+            for (int j = 0; j < total_round - 1; ++j) {
+              std::vector<int32_t> buf;
+              buf.reserve(static_cast<size_t>(n * beam_width));
+              for (int i = 0; i < n; ++i) {
+                const int32_t base = dec_pos[i] + j;
+                for (int b = 0; b < beam_width; ++b) buf.push_back(base);
+              }
+              mip.decode_positions_tensor_list.push_back(
+                  torch::tensor(buf, int_options));
+            }
+          }
         }
       }
     }

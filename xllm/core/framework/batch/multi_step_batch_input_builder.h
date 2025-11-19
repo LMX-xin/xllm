@@ -87,6 +87,7 @@ class MultiStepBatchInputBuilder : public BatchInputBuilder {
     std::vector<int32_t> decode_seq_lens = {0};
     std::vector<int32_t> decode_q_seq_lens = {0};
 #endif
+    std::vector<int32_t> decode_positions_vec;
 
     // Multi-step specific metadata
     uint32_t total_steps = 0;
