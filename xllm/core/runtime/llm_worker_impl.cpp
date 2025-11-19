@@ -337,15 +337,15 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
         top_logprobs = sample_output.top_logprobs.reshape({-1, beam_width});
       }
       LOG(INFO) << "[debug_1111] begin run beam_search_group, round: " << round;
-
-      torch::Tensor out_token_ids =
-          torch::empty(inputs.acc_logprob.sizes(), top_tokens.options());
-      torch::Tensor out_token_index =
-          torch::empty(inputs.acc_logprob.sizes(), top_tokens.options());
-      torch::Tensor out_log_probs =
-          torch::empty(inputs.acc_logprob.sizes(), top_tokens.options());
-      torch::Tensor out_beam_count_prefix_sums =
-          torch::empty(inputs.acc_logprob.sizes(), top_tokens.options());
+      int64_t num_seq = logprobs.numel();
+      torch::Tensor out_token_ids = torch::empty(
+          {num_seq, 1}, inputs.acc_logprob.options().dtype(torch::kInt32));
+      torch::Tensor out_token_index = torch::empty(
+          {num_seq, 1}, inputs.acc_logprob.options().dtype(torch::kFloat32));
+      torch::Tensor out_log_probs = torch::empty(
+          {num_seq, 1}, inputs.acc_logprob.options().dtype(torch::kInt32));
+      torch::Tensor out_beam_count_prefix_sums = torch::empty(
+          {num_seq, 1}, inputs.acc_logprob.options().dtype(torch::kInt32));
       auto out_seqgroup = sequence_group.clone();
 
       xllm_ops::beam_search(inputs.acc_logprob,
@@ -385,10 +385,11 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
         output.do_sample = concated_sampling_params.do_sample;
         output.logprobs = concated_sampling_params.logprobs;
         output.max_top_logprobs = concated_sampling_params.max_top_logprobs;
-        output.beam_search_output.src_seq_idxes = out_token_index;
-        output.beam_search_output.out_tokens = out_token_ids;
-        output.beam_search_output.out_logprobs = out_log_probs;
-        output.beam_search_output.group_offset = out_beam_count_prefix_sums;
+        output.beam_search_output.src_seq_idxes = out_token_index.reshape({-1});
+        output.beam_search_output.out_tokens = out_token_ids.reshape({-1});
+        output.beam_search_output.out_logprobs = out_log_probs.reshape({-1});
+        output.beam_search_output.group_offset =
+            out_beam_count_prefix_sums.reshape({-1});
         output.beam_sequence_group = sequence_group;
       }
 
