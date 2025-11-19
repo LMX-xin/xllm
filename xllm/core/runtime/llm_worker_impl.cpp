@@ -343,24 +343,22 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
       torch::Tensor out_token_index =
           torch::empty(inputs.acc_logprob.sizes(), top_tokens.options());
       torch::Tensor out_log_probs =
-          torch::empty(inputs.acc_logprob.sizes(), log_probs.options());
+          torch::empty(inputs.acc_logprob.sizes(), top_tokens.options());
       torch::Tensor out_beam_count_prefix_sums =
           torch::empty(inputs.acc_logprob.sizes(), top_tokens.options());
+      auto out_seqgroup = sequence_group.clone();
 
-      auto beam_group_tuple =
-          xllm_ops::beam_search_group(inputs.acc_logprob,
-                                      top_tokens,
-                                      top_logprobs,
-                                      sequence_group,
-                                      round,
-                                      out_token_ids,
-                                      out_token_index,
-                                      out_log_probs,
-                                      out_beam_count_prefix_sums);
-      auto& out_token_ids = std::get<0>(beam_group_tuple);
-      auto& out_token_index = std::get<1>(beam_group_tuple);
-      auto& out_log_probs = std::get<2>(beam_group_tuple);
-      auto& out_beam_count_prefix_sums = std::get<3>(beam_group_tuple);
+      xllm_ops::beam_search(inputs.acc_logprob,
+                            top_tokens,
+                            top_logprobs,
+                            sequence_group,
+                            round,
+                            out_token_ids,
+                            out_token_index,
+                            out_log_probs,
+                            out_beam_count_prefix_sums,
+                            out_seqgroup);
+      sequence_group.copy_(out_seqgroup);
       // update next round tokens.
       if (round == 0) {
         flatten_tokens_micro_batches[0] =
