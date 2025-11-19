@@ -279,7 +279,8 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
   auto int_options =
       torch::TensorOptions().dtype(torch::kInt32).device(device_);
   torch::Tensor sequence_group =
-      torch::zeros({batch * beam_width_init, total_rounds}, int_options);
+      torch::zeros({batch, beam_width_init, total_rounds}, int_options);
+  auto my_block_tables = torch::zeros({1, 1}, int_options);
   for (int32_t round = 0; round < total_rounds; ++round) {
     LOG(INFO) << "[debug_1111] begin run for, round: " << round;
     const auto& concated_sampling_params =
@@ -291,6 +292,14 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
       if (!mip.current_round_tensor_list.empty() && round >= 0 &&
           round < static_cast<int32_t>(mip.current_round_tensor_list.size())) {
         mip.current_round_tensor = mip.current_round_tensor_list[round];
+        mip.block_tables = my_block_tables;
+        if (!mip.current_round_tensor.defined() ||
+            mip.current_round_tensor.numel() == 0) {
+          LOG(INFO) << "current_round_tensor is empty, round: " << round;
+        } else {
+          LOG(INFO) << "current_round_tensor is not empty, round: "
+                    << mip.current_round_tensor.numel();
+        }
       }
     }
     LOG(INFO) << "[debug_1111] begin run executor_->forward, round: " << round;
@@ -329,14 +338,37 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
       }
       LOG(INFO) << "[debug_1111] begin run beam_search_group, round: " << round;
 
-      auto beam_group_tuple = xllm_ops::beam_search_group(
-          inputs.acc_logprob, top_tokens, top_logprobs, sequence_group, round);
+      torch::Tensor out_token_ids =
+          torch::empty(inputs.acc_logprob.sizes(), top_tokens.options());
+      torch::Tensor out_token_index =
+          torch::empty(inputs.acc_logprob.sizes(), top_tokens.options());
+      torch::Tensor out_log_probs =
+          torch::empty(inputs.acc_logprob.sizes(), log_probs.options());
+      torch::Tensor out_beam_count_prefix_sums =
+          torch::empty(inputs.acc_logprob.sizes(), top_tokens.options());
+
+      auto beam_group_tuple =
+          xllm_ops::beam_search_group(inputs.acc_logprob,
+                                      top_tokens,
+                                      top_logprobs,
+                                      sequence_group,
+                                      round,
+                                      out_token_ids,
+                                      out_token_index,
+                                      out_log_probs,
+                                      out_beam_count_prefix_sums);
       auto& out_token_ids = std::get<0>(beam_group_tuple);
       auto& out_token_index = std::get<1>(beam_group_tuple);
       auto& out_log_probs = std::get<2>(beam_group_tuple);
       auto& out_beam_count_prefix_sums = std::get<3>(beam_group_tuple);
       // update next round tokens.
-      flatten_tokens_micro_batches[0] = out_token_ids;
+      if (round == 0) {
+        flatten_tokens_micro_batches[0] =
+            sample_output.top_tokens.to(torch::kInt32).reshape({-1});
+      } else {
+        flatten_tokens_micro_batches[0] = out_token_ids.clone().reshape({-1});
+      }
+
       // update next round positions.
       flatten_positions_micro_batches.clear();
       for (auto i = 0; i < inputs.micro_inputs.size(); ++i) {
@@ -365,10 +397,11 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
 #if defined(USE_NPU)
       if (beam_width > 1 && round > 0) {
         LOG(INFO) << "[debug_1111] begin run cache_select, round: " << round;
-        xllm_ops::cache_select(out_token_ids,
+        xllm_ops::cache_select(out_token_index,
                                unshared_k_cache,
                                unshared_v_cache,
-                               inputs.concated_block_tables,
+                               // inputs.concated_block_tables,
+                               my_block_tables,
                                out_beam_count_prefix_sums,
                                round,
                                beam_width,

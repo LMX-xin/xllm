@@ -41,12 +41,15 @@ limitations under the License.
   } while (0)
 namespace xllm_ops {
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-beam_search_group(const torch::Tensor& log_probs,
-                  const torch::Tensor& top_tokens,
-                  const torch::Tensor& top_probs,
-                  torch::Tensor& sequence_group,
-                  int64_t current_step) {
+void beam_search_group(const torch::Tensor& log_probs,
+                       const torch::Tensor& top_tokens,
+                       const torch::Tensor& top_probs,
+                       torch::Tensor& sequence_group,
+                       int64_t current_step,
+                       torch::Tensor& out_token_ids,
+                       torch::Tensor& out_token_index,
+                       torch::Tensor& out_log_probs,
+                       torch::Tensor& out_beam_count_prefix_sums) {
   xllm_ops_utils::check_tensor(log_probs, "log_probs", "beam_search");
   xllm_ops_utils::check_tensor(top_tokens, "top_tokens", "beam_search");
   xllm_ops_utils::check_tensor(top_probs, "top_probs", "beam_search");
@@ -66,20 +69,13 @@ beam_search_group(const torch::Tensor& log_probs,
   xllm_ops_utils::create_acltensor(&top_tokens_ids, top_tokens);
   xllm_ops_utils::create_acltensor(&top_logprobs_ids, top_probs);
   xllm_ops_utils::create_acltensor(&sequence_group_ids, sequence_group);
-  at::Tensor out_token_ids = at::empty(log_probs.sizes(), top_tokens.options());
-  at::Tensor out_token_index =
-      at::empty(log_probs.sizes(), top_tokens.options());
-  at::Tensor out_log_probs = at::empty(log_probs.sizes(), log_probs.options());
-  at::Tensor out_beam_count_prefix_sums =
-      at::empty(log_probs.sizes(), top_tokens.options());
-  at::Tensor out_sequence =
-      at::empty(sequence_group.sizes(), sequence_group.options());
+
   xllm_ops_utils::create_acltensor(&out_token_npu_ids, out_token_ids);
   xllm_ops_utils::create_acltensor(&out_token_npu_index, out_token_index);
   xllm_ops_utils::create_acltensor(&out_log_probs_npu, out_log_probs);
   xllm_ops_utils::create_acltensor(&out_beam_count_prefix_sums_npu,
                                    out_beam_count_prefix_sums);
-  xllm_ops_utils::create_acltensor(&out_sequence_npu, out_sequence);
+  xllm_ops_utils::create_acltensor(&out_sequence_npu, sequence_group);
   uint64_t workspace_size = 0;
   aclOpExecutor* executor = nullptr;
   LOG(INFO) << "beam_search_group shape: log_probs: " << log_probs.sizes();
@@ -130,10 +126,5 @@ beam_search_group(const torch::Tensor& log_probs,
     CHECK_ACL_SUCCESS(aclrtFree(workspace_addr),
                       "beam_search_group: failed to free workspace");
   }
-  sequence_group.copy_(out_sequence);
-  return std::make_tuple(out_token_ids,
-                         out_token_index,
-                         out_log_probs,
-                         out_beam_count_prefix_sums);
 }
 }  // namespace xllm_ops
