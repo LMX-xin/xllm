@@ -337,7 +337,7 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
         top_logprobs = sample_output.top_logprobs.reshape({-1, beam_width});
       }
       LOG(INFO) << "[debug_1111] begin run beam_search_group, round: " << round;
-      int64_t num_seq = logprobs.numel();
+      int64_t num_seq = inputs.acc_logprob.numel();
       torch::Tensor out_token_ids = torch::empty(
           {num_seq, 1}, inputs.acc_logprob.options().dtype(torch::kInt32));
       torch::Tensor out_token_index = torch::empty(
