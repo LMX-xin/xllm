@@ -24,9 +24,11 @@ limitations under the License.
 namespace xllm {
 
 struct BeamSearchOutput {
-  torch::Tensor src_seq_idxes;  // [num_seq]
-  torch::Tensor out_tokens;     // [num_seq]
-  torch::Tensor out_logprobs;   // [num_seq]
+  torch::Tensor src_seq_idxes;               // [num_seq]
+  torch::Tensor out_tokens;                  // [num_seq]
+  torch::Tensor out_logprobs;                // [num_seq]
+  torch::Tensor out_beam_count_prefix_sums;  // [num_seq]
+  torch::Tensor out_sequence;                // [num_seq, sequence_length]
 };
 
 class BeamSearcher {
@@ -44,7 +46,9 @@ class BeamSearcher {
   // top_logprobs: [num_seq, top_k]
   BeamSearchOutput forward(const torch::Tensor& logprobs,
                            const torch::Tensor& top_tokens,
-                           const torch::Tensor& top_logprobs) const;
+                           const torch::Tensor& top_logprobs,
+                           torch::Tensor& sequence_group,
+                           int64_t current_step) const;
 };
 
 }  // namespace xllm
