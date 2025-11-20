@@ -60,6 +60,9 @@ class SequencesGroup {
 
   bool is_prefill_stage() const { return sequences_[0]->is_prefill_stage(); }
 
+  // finish all sequences in the group
+  void finish();
+
  private:
   void add();
 

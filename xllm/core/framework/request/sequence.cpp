@@ -471,4 +471,12 @@ Slice<int32_t> Sequence::get_generated_tokens() const {
   return {tokens_.data(), 0};
 }
 
+void Sequence::finish() {
+  finished_ = true;
+  finish_status_invalidated_ = false;
+  if (finish_reason_ == FinishReason::NONE) {
+    finish_reason_ = FinishReason::STOP;
+  }
+}
+
 }  // namespace xllm

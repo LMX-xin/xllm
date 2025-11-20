@@ -377,4 +377,10 @@ void SequencesGroup::generate_multi_round_output(
             << outputs.size();
 }
 
+void SequencesGroup::finish() {
+  for (auto& sequence : sequences_) {
+    sequence->finish();
+  }
+}
+
 }  // namespace xllm

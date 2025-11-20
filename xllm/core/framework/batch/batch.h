@@ -120,6 +120,8 @@ class Batch {
 
   bool get_batch_prefill_status() const { return all_seqs_in_prefill_; }
 
+  void finish();
+
  private:
   bool update_sequence_state(Sequence* seq, bool replace_fake_token);
 

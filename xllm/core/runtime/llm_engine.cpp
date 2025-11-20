@@ -700,6 +700,10 @@ ForwardOutput LLMEngine::step_multi_round(std::vector<Batch>& batch) {
     ++dp_rank;
   }
   COUNTER_ADD(engine_latency_seconds, timer.elapsed_seconds());
+  // finish all sequences in the batch
+  for (auto& b : batch) {
+    b.finish();
+  }
   return {};
 }
 

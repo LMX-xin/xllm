@@ -295,6 +295,9 @@ class Sequence final {
   int32_t beam_width_cached() const { return beam_width_cached_; }
   int32_t total_rounds_cached() const { return total_rounds_cached_; }
 
+  // finish the sequence by setting finished status and reason
+  void finish();
+
  private:
   // the index of the sequence in the request
   size_t index_ = 0;

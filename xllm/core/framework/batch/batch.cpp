@@ -502,4 +502,12 @@ void Batch::process_beam_sequence_group(const RawForwardOutput& raw_output) {
         beam_width, total_rounds, group_flat2d, last_logprobs);
   }
 }
+
+void Batch::finish() {
+  // Finish all sequence groups
+  for (auto* sequence_group : sequence_groups_) {
+    sequence_group->finish();
+  }
+}
+
 }  // namespace xllm
