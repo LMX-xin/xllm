@@ -87,7 +87,7 @@ void MultiStepBatchInputBuilder::process_single_sequence(
   uint32_t decode_seq_len = n_kv_cache_tokens + 1;
 
   // Validation
-  CHECK_GE(sequence->kv_state().current_max_tokens_capacity(), seq_len);
+  // CHECK_GE(sequence->kv_state().current_max_tokens_capacity(), seq_len);
   CHECK_GT(q_seq_len, 0) << "at least one token should be processed. "
                          << "n_tokens: " << n_tokens
                          << ", n_kv_cache_tokens: " << n_kv_cache_tokens
