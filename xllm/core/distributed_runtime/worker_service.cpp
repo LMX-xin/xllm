@@ -553,7 +553,18 @@ void WorkerService::ExecuteModel(
                             out_tokens,
                             out_logprobs,
                             pb_forward_output);
-    // append batch-level beam output (skipped in immediate send path)
+    {
+      const auto& bsg =
+          safe_to(forward_outputs.value().beam_sequence_group, torch::kCPU, true);
+      if (bsg.defined()) {
+        auto flat = bsg.flatten();
+        std::vector<int32_t> flat_vec(
+            flat.data_ptr<int32_t>(),
+            flat.data_ptr<int32_t>() + flat.numel());
+        ADD_VECTOR_TO_PROTO(
+            pb_forward_output->mutable_beam_sequence_group(), flat_vec);
+      }
+    }
     COUNTER_ADD(worker_service_latency_seconds, timer.elapsed_seconds());
   });
 }
