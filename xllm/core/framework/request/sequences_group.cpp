@@ -336,7 +336,7 @@ void SequencesGroup::generate_multi_round_output(
     std::vector<SequenceOutput>& outputs,
     const Tokenizer& tokenizer,
     const Sequence& base) {
-  LOG(DEBUG) << "[debug_1111]generate_multi_round_output, bw: "
+  VLOG(1) << "[debug_1111]generate_multi_round_output, bw: "
              << base.beam_width_cached()
              << ", total_rounds: " << base.total_rounds_cached()
              << ", flat.size(): " << base.beam_seq_group_flat().size()
@@ -369,10 +369,10 @@ void SequencesGroup::generate_multi_round_output(
     if (fr.has_value()) {
       out.finish_reason = fr.value();
     }
-    LOG(DEBUG) << "[debug_1111] index " << i << ", text: " << out.text;
+    VLOG(1) << "[debug_1111] index " << i << ", text: " << out.text;
     outputs.push_back(std::move(out));
   }
-  LOG(DEBUG) << "[debug_1111]generate_multi_round_output, outputs.size(): "
+  VLOG(1) << "[debug_1111]generate_multi_round_output, outputs.size(): "
              << outputs.size();
 }
 

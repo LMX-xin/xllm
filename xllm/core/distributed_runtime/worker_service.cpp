@@ -462,10 +462,8 @@ void WorkerService::ExecuteModel(
     torch::Tensor out_logprobs;
     std::vector<int32_t> beam_group_flat;
     bool has_beam_group = false;
-    LOG(INFO) << "[debug_1111] service call worker_->step_async";
     // execute model
     auto future = worker_->step_async(batched_fwd_inputs);
-    LOG(INFO) << "[debug_1111] service after call worker_->step_async";
 
     if (!options_.enable_schedule_overlap()) {
       auto forward_outputs = std::move(future).get();
@@ -557,7 +555,6 @@ void WorkerService::ExecuteModel(
       }
       expert_load_data = torch::zeros({1, 1}).to(torch::kInt64).contiguous();
     }
-    LOG(INFO) << "[debug_1111] service call forward_output_to_proto";
     forward_output_to_proto(next_tokens,
                             logprobs,
                             top_tokens,

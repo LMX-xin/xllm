@@ -310,16 +310,6 @@ void Batch::process_beam_search_output(const RawForwardOutput& raw_output,
   if (beam_width <= 1) {
     return;
   }
-  // VLOG(1) << "process_beam_search_output";
-  // VLOG(1) << "beam_width: " << beam_width;
-  // VLOG(1) << "sequences_.size(): " << sequences_.size();
-  // VLOG(1) << "raw_output.src_seq_idxes.size(): " <<
-  // raw_output.src_seq_idxes.size(); VLOG(1) << "raw_output.out_tokens.size():
-  // " << raw_output.out_tokens.size(); VLOG(1) <<
-  // "raw_output.out_logprobs.size(): " << raw_output.out_logprobs.size();
-  // VLOG(1) << "[BEAM/OUT] sizes src=" << raw_output.src_seq_idxes.size()
-  //           << " toks=" << raw_output.out_tokens.size()
-  //           << " logs=" << raw_output.out_logprobs.size();
   CHECK_EQ(raw_output.src_seq_idxes.size(), sequences_.size());
   CHECK_EQ(raw_output.out_tokens.size(), sequences_.size());
   CHECK_EQ(raw_output.out_logprobs.size(), sequences_.size());

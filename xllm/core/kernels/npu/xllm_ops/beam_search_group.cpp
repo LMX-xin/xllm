@@ -54,32 +54,28 @@ void beam_search(const torch::Tensor& logprobs,
   xllm_ops_utils::check_tensor(top_tokens, "top_tokens", "beam_search");
   xllm_ops_utils::check_tensor(top_logprobs, "top_logprobs", "beam_search");
   xllm_ops_utils::check_tensor(sequence_group, "sequence_group", "beam_search");
-  LOG(DEBUG) << "beam_search logprobs shape: " << logprobs.sizes();
-  LOG(DEBUG) << "beam_search top_tokens shape: " << top_tokens.sizes();
-  LOG(DEBUG) << "beam_search top_logprobs shape: " << top_logprobs.sizes();
-  LOG(DEBUG) << "beam_search sequence_group shape: " << sequence_group.sizes();
-  LOG(DEBUG) << "beam_search current_step: " << current_step;
-  LOG(DEBUG) << "beam_search out_token_ids shape: " << out_token_ids.sizes();
-  LOG(DEBUG) << "beam_search out_token_index shape: "
-             << out_token_index.sizes();
-  LOG(DEBUG) << "beam_search out_log_probs shape: " << out_log_probs.sizes();
-  LOG(DEBUG) << "beam_search out_beam_count_prefix_sums shape: "
-             << out_beam_count_prefix_sums.sizes();
-  LOG(DEBUG) << "beam_search out_sequence shape: " << out_sequence.sizes();
-  LOG(DEBUG) << "logprobs is contiguous: " << logprobs.is_contiguous();
-  LOG(DEBUG) << "top_tokens is contiguous: " << top_tokens.is_contiguous();
-  LOG(DEBUG) << "top_logprobs is contiguous: " << top_logprobs.is_contiguous();
-  LOG(DEBUG) << "sequence_group is contiguous: "
-             << sequence_group.is_contiguous();
-  LOG(DEBUG) << "out_token_ids is contiguous: "
-             << out_token_ids.is_contiguous();
-  LOG(DEBUG) << "out_token_index is contiguous: "
-             << out_token_index.is_contiguous();
-  LOG(DEBUG) << "out_log_probs is contiguous: "
-             << out_log_probs.is_contiguous();
-  LOG(DEBUG) << "out_beam_count_prefix_sums is contiguous: "
-             << out_beam_count_prefix_sums.is_contiguous();
-  LOG(DEBUG) << "out_sequence is contiguous: " << out_sequence.is_contiguous();
+  VLOG(1) << "beam_search logprobs shape: " << logprobs.sizes();
+  VLOG(1) << "beam_search top_tokens shape: " << top_tokens.sizes();
+  VLOG(1) << "beam_search top_logprobs shape: " << top_logprobs.sizes();
+  VLOG(1) << "beam_search sequence_group shape: " << sequence_group.sizes();
+  VLOG(1) << "beam_search current_step: " << current_step;
+  VLOG(1) << "beam_search out_token_ids shape: " << out_token_ids.sizes();
+  VLOG(1) << "beam_search out_token_index shape: " << out_token_index.sizes();
+  VLOG(1) << "beam_search out_log_probs shape: " << out_log_probs.sizes();
+  VLOG(1) << "beam_search out_beam_count_prefix_sums shape: "
+          << out_beam_count_prefix_sums.sizes();
+  VLOG(1) << "beam_search out_sequence shape: " << out_sequence.sizes();
+  VLOG(1) << "logprobs is contiguous: " << logprobs.is_contiguous();
+  VLOG(1) << "top_tokens is contiguous: " << top_tokens.is_contiguous();
+  VLOG(1) << "top_logprobs is contiguous: " << top_logprobs.is_contiguous();
+  VLOG(1) << "sequence_group is contiguous: " << sequence_group.is_contiguous();
+  VLOG(1) << "out_token_ids is contiguous: " << out_token_ids.is_contiguous();
+  VLOG(1) << "out_token_index is contiguous: "
+          << out_token_index.is_contiguous();
+  VLOG(1) << "out_log_probs is contiguous: " << out_log_probs.is_contiguous();
+  VLOG(1) << "out_beam_count_prefix_sums is contiguous: "
+          << out_beam_count_prefix_sums.is_contiguous();
+  VLOG(1) << "out_sequence is contiguous: " << out_sequence.is_contiguous();
   aclTensor* logprobs_ids = nullptr;
   aclTensor* top_tokens_ids = nullptr;
   aclTensor* top_logprobs_ids = nullptr;
@@ -89,32 +85,32 @@ void beam_search(const torch::Tensor& logprobs,
   aclTensor* out_log_probs_ids = nullptr;
   aclTensor* out_beam_count_prefix_sums_ids = nullptr;
   aclTensor* out_sequence_ids = nullptr;
-  LOG(DEBUG) << "beam_search start get device id";
+  VLOG(1) << "beam_search start get device id";
   int32_t device_id = logprobs.device().index();
   aclrtStream stream = c10_npu::getCurrentNPUStream(device_id).stream();
-  LOG(DEBUG) << "beam_search start create tensors";
+  VLOG(1) << "beam_search start create tensors";
   xllm_ops_utils::create_acltensor(&logprobs_ids, logprobs);
-  LOG(DEBUG) << "beam_search create logprobs_ids";
+  VLOG(1) << "beam_search create logprobs_ids";
   xllm_ops_utils::create_acltensor(&top_tokens_ids, top_tokens);
-  LOG(DEBUG) << "beam_search create top_tokens_ids";
+  VLOG(1) << "beam_search create top_tokens_ids";
   xllm_ops_utils::create_acltensor(&top_logprobs_ids, top_logprobs);
-  LOG(DEBUG) << "beam_search create top_logprobs_ids";
+  VLOG(1) << "beam_search create top_logprobs_ids";
   xllm_ops_utils::create_acltensor(&sequence_group_ids, sequence_group);
-  LOG(DEBUG) << "beam_search create sequence_group_ids";
+  VLOG(1) << "beam_search create sequence_group_ids";
   xllm_ops_utils::create_acltensor(&out_token_ids_ids, out_token_ids);
-  LOG(DEBUG) << "beam_search create out_token_ids_ids";
+  VLOG(1) << "beam_search create out_token_ids_ids";
   xllm_ops_utils::create_acltensor(&out_token_index_ids, out_token_index);
-  LOG(DEBUG) << "beam_search create out_token_index_ids";
+  VLOG(1) << "beam_search create out_token_index_ids";
   xllm_ops_utils::create_acltensor(&out_log_probs_ids, out_log_probs);
-  LOG(DEBUG) << "beam_search create out_log_probs_ids";
+  VLOG(1) << "beam_search create out_log_probs_ids";
   xllm_ops_utils::create_acltensor(&out_beam_count_prefix_sums_ids,
                                    out_beam_count_prefix_sums);
-  LOG(DEBUG) << "beam_search create out_beam_count_prefix_sums_ids";
+  VLOG(1) << "beam_search create out_beam_count_prefix_sums_ids";
   xllm_ops_utils::create_acltensor(&out_sequence_ids, out_sequence);
-  LOG(DEBUG) << "beam_search create out_sequence_ids";
+  VLOG(1) << "beam_search create out_sequence_ids";
   uint64_t workspace_size = 0;
   aclOpExecutor* executor = nullptr;
-  LOG(DEBUG) << "beam_search start get workspace size";
+  VLOG(1) << "beam_search start get workspace size";
   CHECK_ACL_SUCCESS(
       aclnnBeamSearchGroupGetWorkspaceSize(logprobs_ids,
                                            top_tokens_ids,
@@ -129,7 +125,7 @@ void beam_search(const torch::Tensor& logprobs,
                                            &workspace_size,
                                            &executor),
       "beam_search group: failed to get workspace size");
-  LOG(DEBUG) << "beam_search workspace_size: " << workspace_size;
+  VLOG(1) << "beam_search workspace_size: " << workspace_size;
   void* workspace_addr = nullptr;
   if (workspace_size > 0) {
     CHECK_ACL_SUCCESS(
@@ -141,7 +137,7 @@ void beam_search(const torch::Tensor& logprobs,
       "beam_search group: failed to perform beam search");
   CHECK_ACL_SUCCESS(aclrtSynchronizeStream(stream),
                     "beam_search group: failed to synchronize stream");
-  LOG(DEBUG) << "beam_search end perform beam search";
+  VLOG(1) << "beam_search end perform beam search";
   aclDestroyTensor(logprobs_ids);
   aclDestroyTensor(top_tokens_ids);
   aclDestroyTensor(top_logprobs_ids);
@@ -151,7 +147,7 @@ void beam_search(const torch::Tensor& logprobs,
   aclDestroyTensor(out_log_probs_ids);
   aclDestroyTensor(out_beam_count_prefix_sums_ids);
   aclDestroyTensor(out_sequence_ids);
-  LOG(DEBUG) << "beam_search end destroy tensors";
+  VLOG(1) << "beam_search end destroy tensors";
   if (workspace_size > 0) {
     CHECK_ACL_SUCCESS(aclrtFree(workspace_addr),
                       "beam_search group: failed to free workspace");
