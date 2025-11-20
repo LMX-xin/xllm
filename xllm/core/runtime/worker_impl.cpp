@@ -458,51 +458,62 @@ void WorkerImpl::prepare_work_before_execute(
                             ? true
                             : false;
       // VLOG(1) << "worker impl is_prefill: " << is_prefill;
-      if (!is_prefill) {
+      if (!is_prefill || FLAGS_max_decode_rounds > 0) {
         auto& mip = fwd_inputs_on_device.input_params;
-        uint64_t step_uid = fwd_inputs_on_device.step_uid;
         int32_t beam_width = fwd_inputs_on_device.beam_width;
         int32_t current_round = fwd_inputs_on_device.current_round;
-        const auto& shape = fwd_inputs_on_device.decode_kv_shape;
-        // allocate step-level shared decode kv cache if not exists
-        if (!(mip.decode_k_cache.defined() && mip.decode_v_cache.defined()) &&
-            step_uid != 0 && shape.size() == 4) {
-          int64_t num_sequences = shape[0];
+        int32_t total_round = fwd_inputs_on_device.total_round;
+        const auto& shape = fwd_inputs_on_device.shared_kv_shape;
+
+        if (shape.size() == 3) {
+          int64_t num_tokens = shape[0];
           int64_t head_num = shape[1];
-          int64_t step_rounds = shape[2];
-          int64_t head_dim = shape[3];
-          auto it = step_uid_to_cache_.find(step_uid);
-          if (it == step_uid_to_cache_.end()) {
-            StepDecodeCache cache;
-            auto fp_options =
-                torch::TensorOptions().dtype(dtype_).device(device_);
-            cache.k = torch::zeros(
-                {num_sequences, head_num, step_rounds, head_dim}, fp_options);
-            cache.v = torch::zeros(
-                {num_sequences, head_num, step_rounds, head_dim}, fp_options);
-            cache.num_sequences = num_sequences;
-            cache.head_num = head_num;
-            cache.head_dim = head_dim;
-            cache.rounds = step_rounds;
-            cache.used_rounds = 0;
-            it = step_uid_to_cache_.emplace(step_uid, std::move(cache)).first;
-          }
-          // bind to input params
-          mip.decode_k_cache = it->second.k;
-          mip.decode_v_cache = it->second.v;
-          // update used_rounds, and cleanup if completed
-          it->second.used_rounds++;
-          if (it->second.used_rounds >= it->second.rounds) {
-            step_uid_to_cache_.erase(step_uid);
+          int64_t head_dim = shape[2];
+          auto fp_options =
+              torch::TensorOptions().dtype(dtype_).device(device_);
+          int32_t num_layers = context_.get_model_args().n_layers();
+          mip.shared_k_caches.clear();
+          mip.shared_v_caches.clear();
+          mip.shared_k_caches.reserve(num_layers);
+          mip.shared_v_caches.reserve(num_layers);
+          for (int32_t layer_id = 0; layer_id < num_layers; ++layer_id) {
+            mip.shared_k_caches.emplace_back(
+                torch::zeros({num_tokens, head_num, head_dim}, fp_options));
+            mip.shared_v_caches.emplace_back(
+                torch::zeros({num_tokens, head_num, head_dim}, fp_options));
           }
         }
-        // always refresh scalar metadata tensors (int32 on device)
+        // scalar metadata tensors (int32 on device)
         {
           auto int_options =
               torch::TensorOptions().dtype(torch::kInt32).device(device_);
           mip.beam_width_tensor = torch::tensor({beam_width}, int_options);
-          mip.current_round_tensor =
-              torch::tensor({current_round}, int_options);
+          mip.current_round_tensor_list.clear();
+          for (int r = 0; r < total_round; ++r) {
+            mip.current_round_tensor_list.push_back(
+                torch::tensor({r}, int_options));
+          }
+
+          // beam batch-level tensors are constructed in WorkerService
+        }
+        {
+          auto int_options =
+              torch::TensorOptions().dtype(torch::kInt32).device(device_);
+          const auto& dec_pos = fwd_inputs_on_device.decode_positions_vec;
+          mip.decode_positions_tensor_list.clear();
+          if (!dec_pos.empty() && beam_width > 0 && total_round > 1) {
+            const int32_t n = static_cast<int32_t>(dec_pos.size());
+            for (int j = 0; j < total_round - 1; ++j) {
+              std::vector<int32_t> buf;
+              buf.reserve(static_cast<size_t>(n * beam_width));
+              for (int i = 0; i < n; ++i) {
+                const int32_t base = dec_pos[i] + j;
+                for (int b = 0; b < beam_width; ++b) buf.push_back(base);
+              }
+              mip.decode_positions_tensor_list.push_back(
+                  torch::tensor(buf, int_options));
+            }
+          }
         }
       }
     }
@@ -511,8 +522,15 @@ void WorkerImpl::prepare_work_before_execute(
   }
   processed_inputs.concated_sampling_params =
       inputs.concated_sampling_params.to(device_, dtype_);
+  processed_inputs.concated_decoder_sampling_params =
+      inputs.concated_decoder_sampling_params.to(device_, dtype_);
   processed_inputs.acc_logprob =
       inputs.acc_logprob.to(torch::kFloat32).to(device_);
+  if (inputs.concated_block_tables.defined() &&
+      inputs.concated_block_tables.numel() > 0) {
+    processed_inputs.concated_block_tables =
+        inputs.concated_block_tables.to(torch::kInt32).to(device_);
+  }
   auto ret = prepare_stream_->synchronize();
 }
 

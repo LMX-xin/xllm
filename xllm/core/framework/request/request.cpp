@@ -146,6 +146,7 @@ RequestOutput Request::generate_output(const Tokenizer& tokenizer,
   output.status = Status(StatusCode::OK);
   output.finished = finished();
   output.cancelled = cancelled();
+
   sequences_group_->generate_outputs(output.outputs, tokenizer, thread_pool);
   return output;
 }

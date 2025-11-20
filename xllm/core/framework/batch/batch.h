@@ -78,6 +78,11 @@ class Batch {
   RawForwardInput prepare_forward_input(uint32_t start_idx,
                                         uint32_t end_idx,
                                         ThreadPool* thread_pool = nullptr);
+  RawForwardInput prepare_multi_step_forward_input(
+      uint32_t start_idx,
+      uint32_t end_idx,
+      const ModelArgs* args,
+      ThreadPool* thread_pool = nullptr);
 
   // process output
   //
@@ -103,6 +108,8 @@ class Batch {
   void process_decode_beam_search_output(const RawForwardOutput& raw_output,
                                          bool replace_fake_token);
 
+  void process_beam_sequence_group(const RawForwardOutput& raw_output);
+
   const std::vector<uint32_t>& get_allowed_max_tokens() const {
     return allowed_max_tokens_;
   }
@@ -112,6 +119,8 @@ class Batch {
   }
 
   bool get_batch_prefill_status() const { return all_seqs_in_prefill_; }
+
+  void finish();
 
  private:
   bool update_sequence_state(Sequence* seq, bool replace_fake_token);

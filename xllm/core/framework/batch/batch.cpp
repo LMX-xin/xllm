@@ -29,6 +29,7 @@ limitations under the License.
 #include "framework/model/model_input_params.h"
 #include "framework/request/sequence.h"
 #include "framework/sampling/sampling_params.h"
+#include "multi_step_batch_input_builder.h"
 #include "runtime/params_utils.h"
 #include "util/slice.h"
 #include "util/tensor_helper.h"
@@ -93,6 +94,23 @@ RawForwardInput Batch::prepare_forward_input(uint32_t start_idx,
                             swap_cache_block_infos_,
                             nullptr,
                             thread_pool);
+  return builder.build_raw_forward_input(start_idx, end_idx);
+}
+
+RawForwardInput Batch::prepare_multi_step_forward_input(
+    uint32_t start_idx,
+    uint32_t end_idx,
+    const ModelArgs* args,
+    ThreadPool* thread_pool) {
+  MultiStepBatchInputBuilder builder(sequences_,
+                                     allowed_max_tokens_,
+                                     input_embeddings_vec_,
+                                     mm_data_vec_,
+                                     copy_in_cache_block_infos_,
+                                     copy_out_cache_block_infos_,
+                                     swap_cache_block_infos_,
+                                     args,
+                                     thread_pool);
   return builder.build_raw_forward_input(start_idx, end_idx);
 }
 
@@ -292,16 +310,6 @@ void Batch::process_beam_search_output(const RawForwardOutput& raw_output,
   if (beam_width <= 1) {
     return;
   }
-  // VLOG(1) << "process_beam_search_output";
-  // VLOG(1) << "beam_width: " << beam_width;
-  // VLOG(1) << "sequences_.size(): " << sequences_.size();
-  // VLOG(1) << "raw_output.src_seq_idxes.size(): " <<
-  // raw_output.src_seq_idxes.size(); VLOG(1) << "raw_output.out_tokens.size():
-  // " << raw_output.out_tokens.size(); VLOG(1) <<
-  // "raw_output.out_logprobs.size(): " << raw_output.out_logprobs.size();
-  // VLOG(1) << "[BEAM/OUT] sizes src=" << raw_output.src_seq_idxes.size()
-  //           << " toks=" << raw_output.out_tokens.size()
-  //           << " logs=" << raw_output.out_logprobs.size();
   CHECK_EQ(raw_output.src_seq_idxes.size(), sequences_.size());
   CHECK_EQ(raw_output.out_tokens.size(), sequences_.size());
   CHECK_EQ(raw_output.out_logprobs.size(), sequences_.size());
@@ -376,6 +384,7 @@ void Batch::process_decode_beam_search_output(
   if (beam_width <= 1) {
     return;
   }
+
   // VLOG(1) << "process_decode_beam_search_output";
   // VLOG(1) << "beam_width: " << beam_width;
   // VLOG(1) << "sequences_.size(): " << sequences_.size();
@@ -449,4 +458,46 @@ void Batch::process_decode_beam_search_output(
     update_for_sequence_group(sequence_group_id);
   }
 }
+
+void Batch::process_beam_sequence_group(const RawForwardOutput& raw_output) {
+  const int32_t beam_width = sequences_[0]->sampling_param()->beam_width;
+  if (beam_width <= 1) {
+    return;
+  }
+  if (raw_output.beam_sequence_group.empty()) {
+    LOG(ERROR) << "beam_sequence_group is empty";
+    return;
+  }
+  int32_t total_rounds = FLAGS_max_decode_rounds;
+  size_t num_groups = sequence_groups_.size();
+  for (size_t g = 0; g < num_groups; ++g) {
+    std::vector<std::vector<int32_t>> group_flat2d;
+    group_flat2d.reserve(static_cast<size_t>(beam_width));
+    std::vector<float> last_logprobs;
+    last_logprobs.reserve(static_cast<size_t>(beam_width));
+    for (int b = 0; b < beam_width; ++b) {
+      int row = static_cast<int>(g) * beam_width + b;
+      std::vector<int32_t> row_tokens;
+      row_tokens.reserve(static_cast<size_t>(total_rounds));
+      for (int c = 0; c < total_rounds; ++c) {
+        int idx = row * total_rounds + c;
+        row_tokens.push_back(raw_output.beam_sequence_group[idx]);
+      }
+      group_flat2d.emplace_back(std::move(row_tokens));
+      if (!raw_output.out_logprobs.empty()) {
+        last_logprobs.push_back(raw_output.out_logprobs[row]);
+      }
+    }
+    sequences_[g]->set_beam_result(
+        beam_width, total_rounds, group_flat2d, last_logprobs);
+  }
+}
+
+void Batch::finish() {
+  // Finish all sequence groups
+  for (auto* sequence_group : sequence_groups_) {
+    sequence_group->finish();
+  }
+}
+
 }  // namespace xllm

@@ -345,21 +345,24 @@ void WorkerService::ExecuteModel(
       batched_fwd_inputs.concated_sampling_params.concat(
           batched_fwd_inputs.micro_inputs[i].sampling_params);
     }
-    // Debug (silenced by default)
-    // for (auto i = 0; i < micro_batches_num; ++i) {
-    //   const auto &sp = batched_fwd_inputs.micro_inputs[i].sampling_params;
-    //   VLOG(1) << "[SEL/MICRO] i=" << i
-    //           << " defined=" << sp.selected_token_idxes.defined()
-    //           << " numel="
-    //           << (sp.selected_token_idxes.defined() ?
-    //           sp.selected_token_idxes.size(0)
-    //                                                : -1);
-    // }
-    // auto conc =
-    // batched_fwd_inputs.concated_sampling_params.selected_token_idxes; VLOG(1)
-    // << "[SEL/CONCAT] defined=" << conc.defined() << " numel="
-    //         << (conc.defined() ? conc.size(0) : -1);
 
+    bool has_decoder_sampling = false;
+    for (auto i = 0; i < micro_batches_num; ++i) {
+      has_decoder_sampling =
+          has_decoder_sampling ||
+          batched_fwd_inputs.micro_inputs[i]
+              .decoder_sampling_params.selected_token_idxes.defined();
+    }
+    if (has_decoder_sampling) {
+      batched_fwd_inputs.concated_decoder_sampling_params =
+          batched_fwd_inputs.micro_inputs[0].decoder_sampling_params;
+      for (auto i = 1; i < micro_batches_num; ++i) {
+        batched_fwd_inputs.concated_decoder_sampling_params.concat(
+            batched_fwd_inputs.micro_inputs[i].decoder_sampling_params);
+      }
+    }
+
+    // removed legacy beam batch-level precomputations
     // concat acc_logprob here for beam search together
     if (micro_batches_num > 1) {
       std::vector<torch::Tensor> acc_logprob_vec;
@@ -374,6 +377,40 @@ void WorkerService::ExecuteModel(
           batched_fwd_inputs.micro_inputs[0].acc_logprob;
     }
 
+    {
+      int64_t global_max_blocks = 0;
+      for (auto i = 0; i < micro_batches_num; ++i) {
+        const auto& bt =
+            batched_fwd_inputs.micro_inputs[i].input_params.block_tables;
+        if (bt.defined() && bt.dim() == 2) {
+          global_max_blocks = std::max(global_max_blocks, bt.size(1));
+        }
+      }
+      auto int_options =
+          torch::TensorOptions().dtype(torch::kInt32).device(torch::kCPU);
+      std::vector<torch::Tensor> blocks_list;
+      blocks_list.reserve(micro_batches_num);
+      for (auto i = 0; i < micro_batches_num; ++i) {
+        auto bt = batched_fwd_inputs.micro_inputs[i].input_params.block_tables;
+        if (bt.defined() && bt.dim() == 2) {
+          auto curr_cols = bt.size(1);
+          if (curr_cols < global_max_blocks) {
+            // actually this will never happen, because blocksize is ok.
+            auto pad = torch::zeros({bt.size(0), global_max_blocks - curr_cols},
+                                    int_options);
+            bt = torch::cat({bt.to(torch::kInt32), pad}, /*dim=*/1);
+          } else {
+            bt = bt.to(torch::kInt32);
+          }
+          blocks_list.push_back(bt);
+        }
+      }
+      if (!blocks_list.empty()) {
+        batched_fwd_inputs.concated_block_tables =
+            torch::cat(blocks_list, /*dim=*/0);
+      }
+    }
+
     // model output
     torch::Tensor next_tokens;
     torch::Tensor logprobs;
@@ -386,7 +423,8 @@ void WorkerService::ExecuteModel(
     torch::Tensor src_seq_idxes;
     torch::Tensor out_tokens;
     torch::Tensor out_logprobs;
-
+    std::vector<int32_t> beam_group_flat;
+    bool has_beam_group = false;
     // execute model
     auto future = worker_->step_async(batched_fwd_inputs);
 
@@ -444,6 +482,20 @@ void WorkerService::ExecuteModel(
                         true);
           }
           auto ret = stream_->synchronize();
+
+          // capture batch-level beam sequence group for proto
+          {
+            const auto& bsg =
+                safe_to(forward_outputs.value().beam_sequence_group,
+                        torch::kCPU,
+                        true);
+            if (bsg.defined()) {
+              auto flat = bsg.flatten();
+              beam_group_flat.assign(flat.data_ptr<int32_t>(),
+                                     flat.data_ptr<int32_t>() + flat.numel());
+              has_beam_group = true;
+            }
+          }
         }
       }
     } else {
@@ -466,7 +518,6 @@ void WorkerService::ExecuteModel(
       }
       expert_load_data = torch::zeros({1, 1}).to(torch::kInt64).contiguous();
     }
-
     forward_output_to_proto(next_tokens,
                             logprobs,
                             top_tokens,
@@ -478,6 +529,10 @@ void WorkerService::ExecuteModel(
                             out_tokens,
                             out_logprobs,
                             pb_forward_output);
+    if (has_beam_group) {
+      ADD_VECTOR_TO_PROTO(pb_forward_output->mutable_beam_sequence_group(),
+                          beam_group_flat);
+    }
     COUNTER_ADD(worker_service_latency_seconds, timer.elapsed_seconds());
   });
 }
@@ -544,6 +599,21 @@ void WorkerService::GetLastStepResult(
                                     out_tokens,
                                     out_logprobs,
                                     pb_forward_output);
+            // append batch-level beam output
+            {
+              const auto& bsg =
+                  safe_to(forward_outputs.value().beam_sequence_group,
+                          torch::kCPU,
+                          true);
+              if (bsg.defined()) {
+                auto flat = bsg.flatten();
+                std::vector<int32_t> flat_vec(
+                    flat.data_ptr<int32_t>(),
+                    flat.data_ptr<int32_t>() + flat.numel());
+                ADD_VECTOR_TO_PROTO(
+                    pb_forward_output->mutable_beam_sequence_group(), flat_vec);
+              }
+            }
           }
         }
       });

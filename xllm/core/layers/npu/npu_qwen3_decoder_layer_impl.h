@@ -81,7 +81,8 @@ class NpuQwen3DecoderLayerImpl : public NpuBaseLayer {
                                std::vector<torch::Tensor>& attn_mask,
                                KVCache& kv_cache,
                                std::vector<ModelInputParams>& input_params,
-                               bool is_prefill);
+                               bool is_prefill,
+                               int node_id);
 
   void initialize_quantization_parameters(
       atb_speed::qwen::QwenLayerParam& param);

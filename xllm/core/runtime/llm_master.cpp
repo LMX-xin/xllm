@@ -95,7 +95,11 @@ LLMMaster::LLMMaster(const Options& options)
       .enable_forward_interruption(options_.enable_forward_interruption())
       .max_global_ttft_ms(options_.max_global_ttft_ms())
       .max_global_tpot_ms(options_.max_global_tpot_ms());
-  scheduler_ = create_continuous_scheduler(engine_.get(), scheduler_options);
+  if (FLAGS_max_decode_rounds > 0) {
+    scheduler_ = create_fixsteps_scheduler(engine_.get(), scheduler_options);
+  } else {
+    scheduler_ = create_continuous_scheduler(engine_.get(), scheduler_options);
+  }
 
   if (options_.enable_service_routing()) {
     auto& instance_info = scheduler_->get_instance_info();
@@ -315,6 +319,9 @@ std::shared_ptr<Request> LLMMaster::generate_request(
   }
 
   uint32_t max_tokens = sp.max_tokens;
+  if (FLAGS_max_decode_rounds > 0) {
+    max_tokens = FLAGS_max_decode_rounds;
+  }
   if (max_tokens == 0) {
     const uint32_t kDefaultMaxTokens = 5120;
     max_tokens = kDefaultMaxTokens;
@@ -366,12 +373,12 @@ std::shared_ptr<Request> LLMMaster::generate_request(
       stop_sequences.push_back(std::move(tmp_tokens));
     }
   }
-
+  bool ignore_eos = FLAGS_max_decode_rounds > 0;
   StoppingChecker stopping_checker(
       max_tokens,
       max_context_len - options_.num_speculative_tokens(),
       model_args_.eos_token_id(),
-      sp.ignore_eos,
+      sp.ignore_eos || ignore_eos,
       std::move(stop_tokens),
       std::move(stop_sequences));
 

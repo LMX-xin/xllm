@@ -180,6 +180,7 @@ bool BlockManagerPool::allocate(Sequence* sequence, size_t num_tokens) {
   const size_t num_blocks = sequence->kv_state().num_kv_blocks();
   // round up to the nearest block number
   const size_t block_size = options_.block_size();
+  num_tokens = FLAGS_max_decode_rounds == 0 ? num_tokens : 1;
   const size_t num_blocks_needed = (num_tokens + block_size - 1) / block_size;
   if (num_blocks_needed <= num_blocks) {
     process_beam_search(sequence, /*need_swap*/ true);
@@ -229,7 +230,7 @@ std::vector<Block> BlockManagerPool::allocate(size_t num_tokens,
 }
 
 void BlockManagerPool::process_beam_search(Sequence* sequence, bool need_swap) {
-  if (!sequence->check_beam_search()) {
+  if (!sequence->check_beam_search() || FLAGS_max_decode_rounds > 0) {
     return;
   }
 
