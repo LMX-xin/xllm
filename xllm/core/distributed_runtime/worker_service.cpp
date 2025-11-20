@@ -460,6 +460,8 @@ void WorkerService::ExecuteModel(
     torch::Tensor src_seq_idxes;
     torch::Tensor out_tokens;
     torch::Tensor out_logprobs;
+    std::vector<int32_t> beam_group_flat;
+    bool has_beam_group = false;
     LOG(INFO) << "[debug_1111] service call worker_->step_async";
     // execute model
     auto future = worker_->step_async(batched_fwd_inputs);
@@ -519,6 +521,20 @@ void WorkerService::ExecuteModel(
                         true);
           }
           auto ret = stream_->synchronize();
+
+          // capture batch-level beam sequence group for proto
+          {
+            const auto& bsg =
+                safe_to(forward_outputs.value().beam_sequence_group,
+                        torch::kCPU,
+                        true);
+            if (bsg.defined()) {
+              auto flat = bsg.flatten();
+              beam_group_flat.assign(flat.data_ptr<int32_t>(),
+                                     flat.data_ptr<int32_t>() + flat.numel());
+              has_beam_group = true;
+            }
+          }
         }
       }
     } else {
@@ -553,17 +569,9 @@ void WorkerService::ExecuteModel(
                             out_tokens,
                             out_logprobs,
                             pb_forward_output);
-    {
-      const auto& bsg =
-          safe_to(forward_outputs.value().beam_sequence_group, torch::kCPU, true);
-      if (bsg.defined()) {
-        auto flat = bsg.flatten();
-        std::vector<int32_t> flat_vec(
-            flat.data_ptr<int32_t>(),
-            flat.data_ptr<int32_t>() + flat.numel());
-        ADD_VECTOR_TO_PROTO(
-            pb_forward_output->mutable_beam_sequence_group(), flat_vec);
-      }
+    if (has_beam_group) {
+      ADD_VECTOR_TO_PROTO(pb_forward_output->mutable_beam_sequence_group(),
+                          beam_group_flat);
     }
     COUNTER_ADD(worker_service_latency_seconds, timer.elapsed_seconds());
   });
