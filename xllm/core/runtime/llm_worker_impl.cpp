@@ -277,9 +277,19 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
   int32_t beam_width_init = inputs.micro_inputs[0].beam_width;
   auto int_options =
       torch::TensorOptions().dtype(torch::kInt32).device(device_);
+  auto fp32_options =
+      torch::TensorOptions().dtype(torch::kFloat32).device(device_);
   torch::Tensor sequence_group =
       torch::zeros({batch, beam_width_init, total_rounds}, int_options);
-  auto my_block_tables = torch::zeros({1, 1}, int_options);
+  // preallocate outputs and cached inputs
+  int64_t num_seq = batch * beam_width_init;
+  auto acc_logprob = torch::empty({num_seq, 1}, int_options);
+  torch::Tensor out_token_ids = torch::empty({num_seq, 1}, int_options);
+  torch::Tensor out_token_index = torch::empty({num_seq, 1}, int_options);
+  torch::Tensor out_log_probs = torch::empty({num_seq, 1}, fp32_options);
+  torch::Tensor out_beam_count_prefix_sums =
+      torch::empty({num_seq, 1}, int_options);
+  auto out_seqgroup = sequence_group.clone();
   for (int32_t round = 0; round < total_rounds; ++round) {
     const auto& concated_sampling_params =
         round > 0 ? inputs.concated_decoder_sampling_params
@@ -290,14 +300,6 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
       if (!mip.current_round_tensor_list.empty() && round >= 0 &&
           round < static_cast<int32_t>(mip.current_round_tensor_list.size())) {
         mip.current_round_tensor = mip.current_round_tensor_list[round];
-        mip.block_tables = my_block_tables;
-        if (!mip.current_round_tensor.defined() ||
-            mip.current_round_tensor.numel() == 0) {
-          LOG(INFO) << "current_round_tensor is empty, round: " << round;
-        } else {
-          LOG(INFO) << "current_round_tensor is not empty, round: "
-                    << mip.current_round_tensor.numel();
-        }
       }
     }
     auto hidden_states =
@@ -330,18 +332,7 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
                          .reshape({-1, beam_width});
         top_logprobs = sample_output.top_logprobs.reshape({-1, beam_width});
       }
-      int64_t num_seq = inputs.acc_logprob.numel();
-      torch::Tensor out_token_ids = torch::empty(
-          {num_seq, 1}, inputs.acc_logprob.options().dtype(torch::kInt32));
-      torch::Tensor out_token_index = torch::empty(
-          {num_seq, 1}, inputs.acc_logprob.options().dtype(torch::kInt32));
-      torch::Tensor out_log_probs = torch::empty(
-          {num_seq, 1}, inputs.acc_logprob.options().dtype(torch::kFloat32));
-      torch::Tensor out_beam_count_prefix_sums = torch::empty(
-          {num_seq, 1}, inputs.acc_logprob.options().dtype(torch::kInt32));
-      auto out_seqgroup = sequence_group.clone();
-
-      xllm_ops::beam_search(inputs.acc_logprob.reshape({-1, 1}),
+      xllm_ops::beam_search(acc_logprob,
                             top_tokens,
                             top_logprobs,
                             sequence_group,
@@ -352,6 +343,8 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
                             out_beam_count_prefix_sums,
                             out_seqgroup);
       sequence_group.copy_(out_seqgroup);
+      acc_logprob.copy_(out_log_probs);
+      // keep group offset contiguous across rounds (already in out_* tensors)
       // update next round tokens.
       if (round == 0) {
         flatten_tokens_micro_batches[0] =

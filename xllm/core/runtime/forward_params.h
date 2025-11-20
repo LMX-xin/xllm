@@ -238,15 +238,6 @@ struct BatchedForwardInputs {
   // beam search kernel input
   torch::Tensor acc_logprob;
   torch::Tensor concated_block_tables;
-  // beam search batch-level tensors
-  // IntTensor: [batch_size * beam_width, total_round]
-  // torch::Tensor beam_sequence_group;
-  // IntTensor: [batch_size * beam_width, 1]
-  torch::Tensor beam_token_ids;
-  // IntTensor: [batch_size * beam_width, 1]
-  torch::Tensor beam_token_index;
-  // IntTensor: [batch_size * beam_width, 1]
-  torch::Tensor beam_group_offset;
 };
 
 }  // namespace xllm

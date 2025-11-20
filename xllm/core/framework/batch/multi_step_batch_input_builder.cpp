@@ -141,10 +141,11 @@ void MultiStepBatchInputBuilder::process_single_sequence(
   }
 
   // Input for beam search kernel
-  if (FLAGS_enable_beam_search_kernel && sequence->check_beam_search()) {
-    int32_t bw = std::max(1, FLAGS_beam_width);
-    base_state.acc_logprob_vec.insert(base_state.acc_logprob_vec.end(), bw, 0.0f);
-  }
+  // if (FLAGS_enable_beam_search_kernel && sequence->check_beam_search()) {
+  //   int32_t bw = std::max(1, FLAGS_beam_width);
+  //   base_state.acc_logprob_vec.insert(base_state.acc_logprob_vec.end(), bw,
+  //   0.0f);
+  // }
 
   // Multi-step specific processing
 }
@@ -287,7 +288,6 @@ ForwardInput MultiStepBatchInputBuilder::state_to_forward_input() {
 RawForwardInput MultiStepBatchInputBuilder::state_to_raw_forward_input(
     BatchInputBuilder::BuilderState* state_ptr) {
   // First call the base class implementation to get the basic RawForwardInput
-  LOG(INFO) << "[debug_1111] begin call multistep state_to_raw_forward_input";
   RawForwardInput raw_forward_input =
       BatchInputBuilder::state_to_raw_forward_input(
           state_ptr ? state_ptr : &multi_step_state_.base_state);
@@ -359,7 +359,6 @@ RawForwardInput MultiStepBatchInputBuilder::state_to_raw_forward_input(
         multi_step_state.decode_sampling_params.begin(),
         multi_step_state.decode_sampling_params.end());
   }
-  LOG(INFO) << "[debug_1111] end call multistep state_to_raw_forward_input";
   return raw_forward_input;
 }
 

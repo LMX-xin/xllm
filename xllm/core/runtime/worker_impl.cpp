@@ -531,20 +531,6 @@ void WorkerImpl::prepare_work_before_execute(
   } else {
     LOG(ERROR) << "acc_logprob is undefined or empty";
   }
-  if (inputs.beam_token_ids.defined() && inputs.beam_token_ids.numel() > 0) {
-    processed_inputs.beam_token_ids =
-        inputs.beam_token_ids.to(torch::kInt32).to(device_);
-  }
-  if (inputs.beam_token_index.defined() &&
-      inputs.beam_token_index.numel() > 0) {
-    processed_inputs.beam_token_index =
-        inputs.beam_token_index.to(torch::kInt32).to(device_);
-  }
-  if (inputs.beam_group_offset.defined() &&
-      inputs.beam_group_offset.numel() > 0) {
-    processed_inputs.beam_group_offset =
-        inputs.beam_group_offset.to(torch::kInt32).to(device_);
-  }
   if (inputs.concated_block_tables.defined() &&
       inputs.concated_block_tables.numel() > 0) {
     processed_inputs.concated_block_tables =

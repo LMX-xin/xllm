@@ -362,44 +362,7 @@ void WorkerService::ExecuteModel(
       }
     }
 
-    // construct beam batch-level tensors based on total batch size
-    int32_t total_num_sequences = 0;
-    for (auto& input : batched_fwd_inputs.micro_inputs) {
-      total_num_sequences += input.input_params.num_sequences;
-    }
-    int32_t beam_width = batched_fwd_inputs.micro_inputs.empty()
-                             ? 1
-                             : batched_fwd_inputs.micro_inputs[0].beam_width;
-    int32_t total_round = batched_fwd_inputs.micro_inputs.empty()
-                              ? 0
-                              : batched_fwd_inputs.micro_inputs[0].total_round;
-    auto int_options =
-        torch::TensorOptions().dtype(torch::kInt32).device(torch::kCPU);
-    int64_t beam_sequences =
-        static_cast<int64_t>(total_num_sequences) * beam_width;
-    // batched_fwd_inputs.beam_sequence_group =
-    //     torch::zeros({beam_sequences, total_round}, int_options);
-    batched_fwd_inputs.beam_token_ids =
-        torch::zeros({beam_sequences, 1}, int_options);
-    batched_fwd_inputs.beam_token_index =
-        torch::zeros({beam_sequences, 1}, int_options);
-    batched_fwd_inputs.beam_group_offset =
-        torch::zeros({beam_sequences, 1}, int_options);
-    // Debug (silenced by default)
-    // for (auto i = 0; i < micro_batches_num; ++i) {
-    //   const auto &sp = batched_fwd_inputs.micro_inputs[i].sampling_params;
-    //   VLOG(1) << "[SEL/MICRO] i=" << i
-    //           << " defined=" << sp.selected_token_idxes.defined()
-    //           << " numel="
-    //           << (sp.selected_token_idxes.defined() ?
-    //           sp.selected_token_idxes.size(0)
-    //                                                : -1);
-    // }
-    // auto conc =
-    // batched_fwd_inputs.concated_sampling_params.selected_token_idxes; VLOG(1)
-    // << "[SEL/CONCAT] defined=" << conc.defined() << " numel="
-    //         << (conc.defined() ? conc.size(0) : -1);
-
+    // removed legacy beam batch-level precomputations
     // concat acc_logprob here for beam search together
     if (micro_batches_num > 1) {
       std::vector<torch::Tensor> acc_logprob_vec;
