@@ -524,13 +524,8 @@ void WorkerImpl::prepare_work_before_execute(
       inputs.concated_sampling_params.to(device_, dtype_);
   processed_inputs.concated_decoder_sampling_params =
       inputs.concated_decoder_sampling_params.to(device_, dtype_);
-  //
-  if (inputs.acc_logprob.defined() && inputs.acc_logprob.numel() > 0) {
-    processed_inputs.acc_logprob =
-        inputs.acc_logprob.to(torch::kFloat32).to(device_);
-  } else {
-    LOG(ERROR) << "acc_logprob is undefined or empty";
-  }
+  processed_inputs.acc_logprob =
+      inputs.acc_logprob.to(torch::kFloat32).to(device_);
   if (inputs.concated_block_tables.defined() &&
       inputs.concated_block_tables.numel() > 0) {
     processed_inputs.concated_block_tables =

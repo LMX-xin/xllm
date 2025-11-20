@@ -283,10 +283,10 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
       torch::zeros({batch, beam_width_init, total_rounds}, int_options);
   // preallocate outputs and cached inputs
   int64_t num_seq = batch * beam_width_init;
-  auto acc_logprob = torch::empty({num_seq, 1}, int_options);
+  torch::Tensor acc_logprob = torch::empty({num_seq, 1}, fp32_options);
+  torch::Tensor out_log_probs = torch::empty({num_seq, 1}, fp32_options);
   torch::Tensor out_token_ids = torch::empty({num_seq, 1}, int_options);
   torch::Tensor out_token_index = torch::empty({num_seq, 1}, int_options);
-  torch::Tensor out_log_probs = torch::empty({num_seq, 1}, fp32_options);
   torch::Tensor out_beam_count_prefix_sums =
       torch::empty({num_seq, 1}, int_options);
   auto out_seqgroup = sequence_group.clone();
@@ -384,8 +384,7 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
         xllm_ops::cache_select(out_token_index,
                                unshared_k_cache,
                                unshared_v_cache,
-                               // inputs.concated_block_tables,
-                               my_block_tables,
+                               inputs.concated_block_tables,
                                out_beam_count_prefix_sums,
                                round,
                                beam_width,
