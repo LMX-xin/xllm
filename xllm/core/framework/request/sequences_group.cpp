@@ -370,6 +370,7 @@ void SequencesGroup::generate_multi_round_output(
     if (fr.has_value()) {
       out.finish_reason = fr.value();
     }
+    LOG(INFO) << "[debug_1111] index " << i << ", text: " << out.text;
     outputs.push_back(std::move(out));
   }
   LOG(INFO) << "[debug_1111]generate_multi_round_output, outputs.size(): "
