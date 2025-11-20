@@ -356,9 +356,8 @@ void SequencesGroup::generate_multi_round_output(
 
   const auto& flat2d = base.beam_seq_group_flat();
   size_t rounds = static_cast<size_t>(base.total_rounds_cached());
-  size_t num = std::min(static_cast<size_t>(sequence_params_.n), bw);
-  outputs.reserve(num);
-  for (size_t i = 0; i < num; ++i) {
+  outputs.reserve(bw);
+  for (size_t i = 0; i < bw; ++i) {
     size_t b = rank[i].second;
     int last = std::max(0, static_cast<int>(rounds) - 1);
     std::vector<int32_t> gen_ids(flat2d[b].begin(), flat2d[b].end());
