@@ -96,12 +96,11 @@ void SequencesGroup::generate_outputs(std::vector<SequenceOutput>& outputs,
     auto* base = sequences_[0].get();
     if (base->has_beam_result()) {
       return generate_multi_round_output(outputs, tokenizer, *base);
+    } else {
+      LOG(ERROR) << "SequencesGroup::generate_outputs, beam search is not "
+                    "enabled, but has beam result";
     }
   }
-  LOG(INFO) << "[debug_1111]generate_outputs, sequences_.size(): "
-            << sequences_.size()
-            << ", check_beam_search(): " << check_beam_search()
-            << ", not run generate_multi_round_output";
   // here
   if (sequence_params_.streaming) {
     for (auto& seq : sequences_) {
@@ -337,11 +336,11 @@ void SequencesGroup::generate_multi_round_output(
     std::vector<SequenceOutput>& outputs,
     const Tokenizer& tokenizer,
     const Sequence& base) {
-  LOG(INFO) << "[debug_1111]generate_multi_round_output, bw: "
-            << base.beam_width_cached()
-            << ", total_rounds: " << base.total_rounds_cached()
-            << ", flat.size(): " << base.beam_seq_group_flat().size()
-            << ", last_logprobs.size(): " << base.beam_last_logprobs().size();
+  LOG(DEBUG) << "[debug_1111]generate_multi_round_output, bw: "
+             << base.beam_width_cached()
+             << ", total_rounds: " << base.total_rounds_cached()
+             << ", flat.size(): " << base.beam_seq_group_flat().size()
+             << ", last_logprobs.size(): " << base.beam_last_logprobs().size();
   size_t bw = static_cast<size_t>(base.beam_width_cached());
   const auto& last_lps = base.beam_last_logprobs();
   std::vector<std::pair<float, size_t>> rank;
@@ -370,11 +369,11 @@ void SequencesGroup::generate_multi_round_output(
     if (fr.has_value()) {
       out.finish_reason = fr.value();
     }
-    LOG(INFO) << "[debug_1111] index " << i << ", text: " << out.text;
+    LOG(DEBUG) << "[debug_1111] index " << i << ", text: " << out.text;
     outputs.push_back(std::move(out));
   }
-  LOG(INFO) << "[debug_1111]generate_multi_round_output, outputs.size(): "
-            << outputs.size();
+  LOG(DEBUG) << "[debug_1111]generate_multi_round_output, outputs.size(): "
+             << outputs.size();
 }
 
 void SequencesGroup::finish() {

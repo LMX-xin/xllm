@@ -273,10 +273,6 @@ class Sequence final {
                        int32_t total_rounds,
                        const std::vector<std::vector<int32_t>>& flat,
                        const std::vector<float>& last_logprobs) {
-    LOG(INFO) << "[debug_1111]set_beam_result, bw: " << bw
-              << ", total_rounds: " << total_rounds
-              << ", flat.size(): " << flat.size()
-              << ", last_logprobs.size(): " << last_logprobs.size();
     beam_width_cached_ = bw;
     total_rounds_cached_ = total_rounds;
     beam_seq_group_flat_ = flat;

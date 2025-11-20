@@ -299,8 +299,6 @@ folly::SemiFuture<std::optional<ForwardOutput>> RemoteWorker::step_async(
 
 folly::SemiFuture<std::optional<RawForwardOutput>> RemoteWorker::step_async(
     const std::vector<RawForwardInput>& inputs) {
-  LOG(INFO) << "[debug_1111] RemoteWorker Method step_async with "
-               "RawForwardInput param is UnImplemented.";
   folly::Promise<std::optional<RawForwardOutput>> promise;
   auto future = promise.getSemiFuture();
   threadpool_.schedule(

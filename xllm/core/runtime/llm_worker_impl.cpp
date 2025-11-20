@@ -245,7 +245,6 @@ std::optional<ForwardOutput> LLMWorkerImpl::step(
 std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
     const BatchedForwardInputs& inputs) {
   device_.set_device();
-  LOG(INFO) << "[debug_1111] in step_multi_round";
   Timer timer;
   std::vector<torch::Tensor> flatten_tokens_micro_batches;
   std::vector<torch::Tensor> flatten_positions_micro_batches;
@@ -282,7 +281,6 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
       torch::zeros({batch, beam_width_init, total_rounds}, int_options);
   auto my_block_tables = torch::zeros({1, 1}, int_options);
   for (int32_t round = 0; round < total_rounds; ++round) {
-    LOG(INFO) << "[debug_1111] begin run for, round: " << round;
     const auto& concated_sampling_params =
         round > 0 ? inputs.concated_decoder_sampling_params
                   : inputs.concated_sampling_params;
@@ -302,7 +300,6 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
         }
       }
     }
-    LOG(INFO) << "[debug_1111] begin run executor_->forward, round: " << round;
     auto hidden_states =
         model_executor_->forward(flatten_tokens_micro_batches,
                                  flatten_positions_micro_batches,
@@ -313,15 +310,12 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
     }
 
     torch::Tensor logits;
-    LOG(INFO) << "[debug_1111] begin run model->logits, round: " << round;
 
     if (concated_sampling_params.selected_token_idxes.defined()) {
       logits = model_->logits(hidden_states,
                               concated_sampling_params.selected_token_idxes);
     }
     if (concated_sampling_params.selected_token_idxes.defined()) {
-      LOG(INFO) << "[debug_1111] begin run sampler_->forward, round: " << round;
-
       auto sample_output = sampler_->forward(logits, concated_sampling_params);
       torch::Tensor top_tokens;
       torch::Tensor top_logprobs;
@@ -336,7 +330,6 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
                          .reshape({-1, beam_width});
         top_logprobs = sample_output.top_logprobs.reshape({-1, beam_width});
       }
-      LOG(INFO) << "[debug_1111] begin run beam_search_group, round: " << round;
       int64_t num_seq = inputs.acc_logprob.numel();
       torch::Tensor out_token_ids = torch::empty(
           {num_seq, 1}, inputs.acc_logprob.options().dtype(torch::kInt32));
@@ -395,7 +388,6 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
 
 #if defined(USE_NPU)
       if (beam_width > 1 && round > 0) {
-        LOG(INFO) << "[debug_1111] begin run cache_select, round: " << round;
         xllm_ops::cache_select(out_token_index,
                                unshared_k_cache,
                                unshared_v_cache,

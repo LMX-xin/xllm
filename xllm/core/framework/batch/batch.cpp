@@ -475,7 +475,7 @@ void Batch::process_beam_sequence_group(const RawForwardOutput& raw_output) {
     return;
   }
   if (raw_output.beam_sequence_group.empty()) {
-    LOG(INFO) << "[debug_1111] beam_sequence_group is empty";
+    LOG(ERROR) << "beam_sequence_group is empty";
     return;
   }
   int32_t total_rounds = FLAGS_max_decode_rounds;
