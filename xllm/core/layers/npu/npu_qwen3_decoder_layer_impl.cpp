@@ -428,11 +428,8 @@ int64_t NpuQwen3DecoderLayerImpl::init_layer() {
   init_attn_mask();
   name_ = "qwen3_decoder_layer";
   model_name_ = "qwen3";
-  printf("init_layer start\n");
   CHECK_OPERATION_STATUS_RETURN(init_node(prefill_node_, prefill_param_));
-  printf("prefill_node_ init success\n");
   CHECK_OPERATION_STATUS_RETURN(init_node(decode_node_, decode_param_));
-  printf("decode_node_ init success\n");
   return atb::NO_ERROR;
 }
 
