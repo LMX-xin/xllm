@@ -287,12 +287,10 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
   torch::Tensor out_log_probs = torch::empty({num_seq, 1}, fp32_options);
   torch::Tensor out_token_ids = torch::empty({num_seq, 1}, int_options);
   torch::Tensor out_token_index = torch::empty({num_seq, 1}, int_options);
-  torch::Tensor round_tensor = torch::zeros({1}, int_options);
   torch::Tensor out_beam_count_prefix_sums =
       torch::empty({num_seq, 1}, int_options);
   auto out_seqgroup = sequence_group.clone();
   for (int32_t round = 0; round < total_rounds; ++round) {
-    round_tensor.fill_(round);
     const auto& concated_sampling_params =
         round > 0 ? inputs.concated_decoder_sampling_params
                   : inputs.concated_sampling_params;
@@ -302,7 +300,9 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
       if (!mip.current_round_tensor_list.empty() && round >= 0 &&
           round < static_cast<int32_t>(mip.current_round_tensor_list.size())) {
         mip.current_round_tensor = mip.current_round_tensor_list[round];
+        mip.current_round = round;
       }
+      mip.beam_width = inputs.micro_inputs[0].beam_width;
     }
     auto hidden_states =
         model_executor_->forward(flatten_tokens_micro_batches,
@@ -338,7 +338,7 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
                             top_tokens,
                             top_logprobs,
                             sequence_group,
-                            round_tensor,
+                            round,
                             out_token_ids,
                             out_token_index,
                             out_log_probs,
@@ -388,7 +388,7 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
                                unshared_v_cache,
                                inputs.concated_block_tables,
                                out_beam_count_prefix_sums,
-                               round_tensor,
+                               round,
                                beam_width,
                                layer_num);
       }

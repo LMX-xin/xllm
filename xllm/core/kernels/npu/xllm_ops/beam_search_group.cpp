@@ -44,7 +44,7 @@ void beam_search(const torch::Tensor& logprobs,
                  const torch::Tensor& top_tokens,
                  const torch::Tensor& top_logprobs,
                  torch::Tensor& sequence_group,
-                 torch::Tensor& round_tensor,
+                 int64_t current_step,
                  torch::Tensor& out_token_ids,
                  torch::Tensor& out_token_index,
                  torch::Tensor& out_log_probs,
@@ -58,7 +58,7 @@ void beam_search(const torch::Tensor& logprobs,
   VLOG(1) << "beam_search top_tokens shape: " << top_tokens.sizes();
   VLOG(1) << "beam_search top_logprobs shape: " << top_logprobs.sizes();
   VLOG(1) << "beam_search sequence_group shape: " << sequence_group.sizes();
-  VLOG(1) << "beam_search round_tensor: " << round_tensor.sizes();
+  VLOG(1) << "beam_search current_step: " << current_step;
   VLOG(1) << "beam_search out_token_ids shape: " << out_token_ids.sizes();
   VLOG(1) << "beam_search out_token_index shape: " << out_token_index.sizes();
   VLOG(1) << "beam_search out_log_probs shape: " << out_log_probs.sizes();
@@ -85,8 +85,6 @@ void beam_search(const torch::Tensor& logprobs,
   aclTensor* out_log_probs_ids = nullptr;
   aclTensor* out_beam_count_prefix_sums_ids = nullptr;
   aclTensor* out_sequence_ids = nullptr;
-  aclTensor* round_tensor_ids = nullptr;
-  VLOG(1) << "beam_search start get device id";
   int32_t device_id = logprobs.device().index();
   aclrtStream stream = c10_npu::getCurrentNPUStream(device_id).stream();
   VLOG(1) << "beam_search start create tensors";
@@ -109,8 +107,6 @@ void beam_search(const torch::Tensor& logprobs,
   VLOG(1) << "beam_search create out_beam_count_prefix_sums_ids";
   xllm_ops_utils::create_acltensor(&out_sequence_ids, out_sequence);
   VLOG(1) << "beam_search create out_sequence_ids";
-  xllm_ops_utils::create_acltensor(&round_tensor_ids, round_tensor);
-  VLOG(1) << "beam_search create round_tensor_ids";
   uint64_t workspace_size = 0;
   aclOpExecutor* executor = nullptr;
   VLOG(1) << "beam_search start get workspace size";
@@ -119,7 +115,7 @@ void beam_search(const torch::Tensor& logprobs,
                                            top_tokens_ids,
                                            top_logprobs_ids,
                                            sequence_group_ids,
-                                           round_tensor_ids,
+                                           current_step,
                                            out_token_ids_ids,
                                            out_token_index_ids,
                                            out_log_probs_ids,
@@ -150,7 +146,6 @@ void beam_search(const torch::Tensor& logprobs,
   aclDestroyTensor(out_log_probs_ids);
   aclDestroyTensor(out_beam_count_prefix_sums_ids);
   aclDestroyTensor(out_sequence_ids);
-  aclDestroyTensor(round_tensor_ids);
   VLOG(1) << "beam_search end destroy tensors";
   if (workspace_size > 0) {
     CHECK_ACL_SUCCESS(aclrtFree(workspace_addr),

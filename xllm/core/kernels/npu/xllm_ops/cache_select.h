@@ -31,7 +31,7 @@ void cache_select(const torch::Tensor& beam_index,
                   std::vector<torch::Tensor> x_value_block,
                   const torch::Tensor& block_table,
                   const torch::Tensor& group_offset,
-                  torch::Tensor& decode_step,
+                  int64_t decode_step,
                   int64_t beam_size,
                   int64_t layer_num);
 }  // namespace xllm_ops

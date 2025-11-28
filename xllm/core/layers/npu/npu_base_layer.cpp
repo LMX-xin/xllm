@@ -22,6 +22,7 @@ limitations under the License.
 #include <torch_npu/csrc/aten/NPUNativeFunctions.h>
 #include <torch_npu/csrc/framework/utils/OpPreparation.h>
 #endif
+#include "core/common/acl_graph_runtime.h"
 #include "core/common/global_flags.h"
 
 namespace xllm {
@@ -56,8 +57,9 @@ atb::Status NpuBaseLayer::execute_node(
   //   However, libtorch_npu current stream is set to default stream after
   //   capture ends, causing inconsistency between ATB context and the actual
   //   execution stream
-  if (FLAGS_enable_acl_graph) {
-    void* stream = c10_npu::getCurrentNPUStream(device_.index()).stream();
+  if (FLAGS_enable_acl_graph && xllm::in_acl_graph_capture()) {
+    auto npu_stream = c10_npu::getCurrentNPUStream(device_.index());
+    void* stream = npu_stream.stream();
     context_->SetExecuteStream(stream);
   }
   // if (FLAGS_enable_acl_graph && !graph_captured_) {
