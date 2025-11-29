@@ -101,6 +101,10 @@ LLMMaster::LLMMaster(const Options& options)
     scheduler_ = create_continuous_scheduler(engine_.get(), scheduler_options);
   }
 
+  VLOG(1) << "[REC_CONFIG] max_decode_rounds=" << FLAGS_max_decode_rounds
+          << ", enable_acl_graph=" << FLAGS_enable_acl_graph
+          << ", enable_beam_search_kernel=" << FLAGS_enable_beam_search_kernel;
+
   if (options_.enable_service_routing()) {
     auto& instance_info = scheduler_->get_instance_info();
     XServiceClient::get_instance()->register_instance(instance_info);

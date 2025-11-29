@@ -146,7 +146,7 @@ message BlockPair {
   int32 host_block_id = 2;
 }
 
-  message ForwardInput {
+message ForwardInput {
   // flatten the token ids and positions
   repeated int32 flatten_tokens_vec = 1;
   repeated int32 flatten_positions_vec = 2;

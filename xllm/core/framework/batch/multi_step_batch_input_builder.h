@@ -32,7 +32,12 @@ namespace xllm {
 
 struct ModelArgs;
 
-class MultiStepBatchInputBuilder : public BatchInputBuilder {
+// NOTE:
+// This class intentionally does NOT inherit from `BatchInputBuilder`.
+// It is a standalone builder used for multi-round / step-level decode,
+// to avoid impacting the behavior and evolution of the legacy
+// `BatchInputBuilder` that existed in commit fcec9c9.
+class MultiStepBatchInputBuilder {
  public:
   explicit MultiStepBatchInputBuilder(
       const std::vector<Sequence*>& sequences,
@@ -50,19 +55,68 @@ class MultiStepBatchInputBuilder : public BatchInputBuilder {
 
   ~MultiStepBatchInputBuilder() = default;
 
+  // Build multi-step raw forward input for [start_idx, end_idx)
+  RawForwardInput build_raw_forward_input(uint32_t start_idx, uint32_t end_idx);
+
+  // Local builder state (copy of the legacy BatchInputBuilder::BuilderState)
+  struct BuilderState {
+    // Token and position data
+    std::vector<int32_t> flatten_tokens_vec;
+    std::vector<int32_t> flatten_positions_vec;
+    std::vector<torch::Tensor> mrope_positions_vec;
+
+    // Sampling data
+    std::vector<const RequestSamplingParam*> sampling_params;
+    std::vector<int32_t> selected_token_idxes;
+    std::vector<int32_t> sample_idxes;
+
+    // Unique token tracking
+    std::vector<std::vector<int64_t>> unique_token_ids_vec;
+    std::vector<std::vector<int32_t>> unique_token_counts_vec;
+    std::vector<int32_t> unique_token_lens_vec;
+
+    // Sequence metadata
+    bool empty_kv_cache = true;
+    uint32_t max_seq_len = 0;
+    uint32_t q_max_seq_len = 0;
+#if defined(USE_NPU)
+    std::vector<int32_t> seq_lens;
+    std::vector<int32_t> q_seq_lens;
+#elif defined(USE_MLU)
+    std::vector<int32_t> seq_lens = {0};    // cu_seq_lens
+    std::vector<int32_t> q_seq_lens = {0};  // q_cu_seq_len
+#endif
+
+    // Cache and block data
+    std::vector<int32_t> new_token_slot_ids;
+    std::vector<std::vector<int32_t>> block_tables_vec;
+
+    // beam search kernel input
+    std::vector<float> acc_logprob_vec;
+
+    // Additional data
+    std::vector<int32_t> embedding_ids;
+    std::vector<int32_t> extra_token_ids;
+    uint32_t prefill_seq_len = 0;
+    std::vector<TransferKVInfo> transfer_kv_infos;
+
+    // for continuous kvcache
+    std::vector<int64_t> new_cache_slot_offsets;  //[n_tokens]
+    std::vector<int64_t> kv_cache_start_offsets;  //[n_seq]
+  };
+
  protected:
-  // Core building methods - Override base class methods to provide multi-step
-  // logic
+  // Core building methods - provide multi-step specific logic
   void process_single_sequence(
       int32_t seq_index,
-      BatchInputBuilder::BuilderState* state_ptr = nullptr,
-      std::unordered_set<int32_t>* write_block_ids_ptr = nullptr) override;
+      BuilderState* state_ptr = nullptr,
+      std::unordered_set<int32_t>* write_block_ids_ptr = nullptr);
 
  private:
   // State management for MultiStep
   struct MultiStepBuilderState {
-    // Base state from parent class
-    BatchInputBuilder::BuilderState base_state;
+    // Base state compatible with single-round builder
+    BuilderState base_state;
 
     // Multi-step step tracking data
     std::vector<int32_t> step_tokens_vec;
@@ -104,24 +158,41 @@ class MultiStepBatchInputBuilder : public BatchInputBuilder {
                                     MultiStepBuilderState* state_ptr);
 
   // Multi-step specific forward input conversion functions
-  ForwardInput state_to_forward_input() override;
-  RawForwardInput state_to_raw_forward_input(
-      BatchInputBuilder::BuilderState* state_ptr = nullptr) override;
+  ForwardInput state_to_forward_input();
+  RawForwardInput state_to_raw_forward_input(BuilderState* state_ptr = nullptr);
 
-  void setup_kv_cache_info(
-      Sequence* sequence,
-      uint32_t n_kv_cache_tokens,
-      uint32_t seq_len,
-      uint32_t q_seq_len,
-      BatchInputBuilder::BuilderState* state_ptr,
-      std::unordered_set<int32_t>* write_block_ids_ptr) override;
+  void setup_kv_cache_info(Sequence* sequence,
+                           uint32_t n_kv_cache_tokens,
+                           uint32_t seq_len,
+                           uint32_t q_seq_len,
+                           BuilderState* state_ptr,
+                           std::unordered_set<int32_t>* write_block_ids_ptr);
 
-  void setup_continuous_kv_cache_info(
-      Sequence* sequence,
-      uint32_t n_kv_cache_tokens,
-      uint32_t seq_len,
-      uint32_t q_seq_len,
-      BatchInputBuilder::BuilderState* state_ptr) override;
+  void setup_continuous_kv_cache_info(Sequence* sequence,
+                                      uint32_t n_kv_cache_tokens,
+                                      uint32_t seq_len,
+                                      uint32_t q_seq_len,
+                                      BuilderState* state_ptr);
+
+  // Input data (same semantics as in BatchInputBuilder)
+  const std::vector<Sequence*>& sequences_;
+  const std::vector<uint32_t>& allowed_max_tokens_;
+  const std::vector<torch::Tensor>& input_embeddings_vec_;
+  const std::vector<MMData>& mm_data_vec_;
+  const ModelArgs* args_;
+
+  // Configuration/state
+  int32_t num_sequences_ = 0;
+  bool use_mrope_ = false;
+
+  // copy in and out cache contents
+  std::unordered_set<int32_t> write_block_ids_;
+  const std::vector<CacheBlockInfo>* copy_in_cache_block_infos_ = nullptr;
+  const std::vector<CacheBlockInfo>* copy_out_cache_block_infos_ = nullptr;
+  std::vector<CacheBlockInfo>* swap_cache_block_infos_ = nullptr;
+
+  // thread pool for potential future multithreaded processing, not owned
+  ThreadPool* thread_pool_ = nullptr;
 };
 
 }  // namespace xllm

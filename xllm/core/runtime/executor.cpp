@@ -35,7 +35,7 @@ Executor::Executor(CausalLM* model,
                    const runtime::Options& options) {
 #if defined(USE_NPU)
   if (FLAGS_enable_acl_graph && device.is_privateuseone()) {
-    if (FLAGS_enable_beam_search_kernel) {
+    if (FLAGS_enable_beam_search_kernel && FLAGS_max_decode_rounds > 0) {
       LOG(INFO) << "Creating ACL Graph Rec Executor for NPU device with "
                    "beam-search kernel enabled";
       impl_ = std::make_unique<AclGraphRecExecutorImpl>(

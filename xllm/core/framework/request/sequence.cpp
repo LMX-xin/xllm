@@ -27,6 +27,7 @@ limitations under the License.
 #include <string>
 #include <vector>
 
+#include "core/common/global_flags.h"
 #include "core/common/metrics.h"
 #include "core/framework/tokenizer/tokenizer.h"
 #include "core/util/slice.h"
@@ -100,10 +101,7 @@ Sequence::Sequence(const Sequence& other)
 void Sequence::append_token(const Token& token) {
   CHECK_LT(num_tokens_, tokens_.size())
       << "exceed the token capacity of the sequence";
-  // 在 step-level decode 轮次允许覆盖/追加（中间轮次不判定结束）
-  if (!in_step_decode_round_) {
-    CHECK(!finished_) << "cannot append token to a finished sequence";
-  }
+  CHECK(!finished_) << "cannot append token to a finished sequence";
   CHECK(kv_state_.kv_cache_tokens_num() > 0 && !is_prefill_stage())
       << "cannot append token to a prefill sequence";
 
@@ -126,11 +124,7 @@ void Sequence::append_token(const Token& token) {
 
   // append the token id and update the token count
   const auto cur_idx = num_tokens_++;
-  // 在 step-level decode 轮次不更新全局 KV（使用 decode_k/v
-  // cache），其他场景正常更新
-  if (!in_step_decode_round_) {
-    kv_state_.set_kv_cache_tokens_num(cur_idx);
-  }
+  kv_state_.set_kv_cache_tokens_num(cur_idx);
   const int32_t token_id = static_cast<int32_t>(token.id);
   tokens_[cur_idx] = token_id;
 
@@ -171,9 +165,7 @@ void Sequence::update_last_step_token(const Token& token, size_t token_offset) {
 
   // for mtp, currently only support multi-nodes task.
   if (token_offset > 0) {
-    if (!in_step_decode_round_) {
-      kv_state_.incr_kv_cache_tokens_num(1);
-    }
+    kv_state_.incr_kv_cache_tokens_num(1);
     num_tokens_++;
     // when enable speculative decoding, fake token id will be covered.
     tokens_[cur_generated_token_idx_ + 2] =
@@ -406,12 +398,6 @@ bool Sequence::finished() const {
   // return the cached finish status
   if (!finish_status_invalidated_) {
     return finished_;
-  }
-
-  // 在 engine 的 step-level decode 轮次中，统一延迟完成判定
-  // 三轮 decode 期间一律不认为结束，直到轮次结束（engine 清除此标记）
-  if (in_step_decode_round_) {
-    return false;
   }
 
   // Embedding sequence never be finished until it updates its embeddings

@@ -254,9 +254,6 @@ class WorkerImpl {
   Status status_ = Status::UNINITIALIZED;
 
   torch::Tensor expert_load_data_;
-
-  // step-level decode shared cache removed; decode cache tensors are
-  // constructed per input via decode_kv_shape
 };
 
 }  // namespace xllm

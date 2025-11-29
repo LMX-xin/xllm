@@ -120,8 +120,6 @@ void Batch::process_sample_output(const RawForwardOutput& raw_output,
   // this means all sequences are in prefill stage status.
   const int64_t num_seqs = raw_output.outputs.size();
   int64_t output_idx = 0;
-  // LOG(INFO) << "process_sample_output num_seqs: " << num_seqs;
-  // LOG(INFO) << "sequences_.size(): " << sequences_.size();
   for (auto* seq : sequences_) {
     if (seq->finished()) {
       output_idx++;
@@ -135,7 +133,6 @@ void Batch::process_sample_output(const RawForwardOutput& raw_output,
     const auto curr_idx = output_idx++;
     const RawSampleOutput raw_sam_output = raw_output.outputs[curr_idx];
     const size_t token_size = raw_sam_output.tokens.size();
-    // LOG(INFO) << "process_sample_output token_size: " << token_size;
     for (size_t t_idx = 0; t_idx < token_size; t_idx++) {
       Token t(raw_sam_output.tokens[t_idx].id);
       if (raw_sam_output.tokens[t_idx].logprob.has_value()) {
@@ -281,7 +278,6 @@ void Batch::process_embedding_output(const torch::Tensor& output_embedding) {
 }
 
 void Batch::process_beam_search() {
-  // First, let each sequence group perform its internal beam expansion.
   for (auto* sequence_group : sequence_groups_) {
     sequence_group->process_beam_search();
   }
@@ -289,19 +285,21 @@ void Batch::process_beam_search() {
   // Then, rebuild the flat `sequences_` list from all groups to reflect
   // the latest beam-expanded sequences and avoid dangling pointers.
   // Also reset `allowed_max_tokens_` to match the rebuilt sequences list.
-  std::vector<Sequence*> rebuilt_sequences;
-  rebuilt_sequences.reserve(sequences_.size());
-  std::vector<uint32_t> rebuilt_allowed_max_tokens;
-  for (auto* sequence_group : sequence_groups_) {
-    auto& group_sequences = sequence_group->sequences();
-    for (auto& uptr_seq : group_sequences) {
-      rebuilt_sequences.push_back(uptr_seq.get());
-      rebuilt_allowed_max_tokens.push_back(
-          std::numeric_limits<uint32_t>::max());
+  if (FLAGS_max_decode_rounds > 0) {
+    std::vector<Sequence*> rebuilt_sequences;
+    rebuilt_sequences.reserve(sequences_.size());
+    std::vector<uint32_t> rebuilt_allowed_max_tokens;
+    for (auto* sequence_group : sequence_groups_) {
+      auto& group_sequences = sequence_group->sequences();
+      for (auto& uptr_seq : group_sequences) {
+        rebuilt_sequences.push_back(uptr_seq.get());
+        rebuilt_allowed_max_tokens.push_back(
+            std::numeric_limits<uint32_t>::max());
+      }
     }
+    sequences_.swap(rebuilt_sequences);
+    allowed_max_tokens_.swap(rebuilt_allowed_max_tokens);
   }
-  sequences_.swap(rebuilt_sequences);
-  allowed_max_tokens_.swap(rebuilt_allowed_max_tokens);
 }
 
 void Batch::process_beam_search_output(const RawForwardOutput& raw_output,
@@ -310,6 +308,7 @@ void Batch::process_beam_search_output(const RawForwardOutput& raw_output,
   if (beam_width <= 1) {
     return;
   }
+
   CHECK_EQ(raw_output.src_seq_idxes.size(), sequences_.size());
   CHECK_EQ(raw_output.out_tokens.size(), sequences_.size());
   CHECK_EQ(raw_output.out_logprobs.size(), sequences_.size());
@@ -384,14 +383,6 @@ void Batch::process_decode_beam_search_output(
   if (beam_width <= 1) {
     return;
   }
-
-  // VLOG(1) << "process_decode_beam_search_output";
-  // VLOG(1) << "beam_width: " << beam_width;
-  // VLOG(1) << "sequences_.size(): " << sequences_.size();
-  // VLOG(1) << "raw_output.src_seq_idxes.size(): " <<
-  // raw_output.src_seq_idxes.size(); VLOG(1) << "raw_output.out_tokens.size():
-  // " << raw_output.out_tokens.size(); VLOG(1) <<
-  // "raw_output.out_logprobs.size(): " << raw_output.out_logprobs.size();
   CHECK_EQ(raw_output.src_seq_idxes.size(), sequences_.size());
   CHECK_EQ(raw_output.out_tokens.size(), sequences_.size());
   CHECK_EQ(raw_output.out_logprobs.size(), sequences_.size());
@@ -439,16 +430,6 @@ void Batch::process_decode_beam_search_output(
       base_seq->logprob_state()->set_acc_logprob(
           raw_output.out_logprobs[task_id]);
       base_seq->logprob_state()->set_last_acc_token_idx(base_seq->num_tokens());
-
-      // bool need_swap = false;
-      // if (seq_idx_set.find(src_seq_idx) != seq_idx_set.end()) {
-      //   need_swap = true;
-      // } else {
-      //   seq_idx_set.insert(src_seq_idx);
-      // }
-
-      // auto src_blocks = src_seq->kv_state().kv_blocks();
-      // base_seq->kv_state().set_src_blocks(src_blocks, need_swap);
     }
   };
 

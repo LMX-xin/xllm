@@ -77,9 +77,17 @@ std::optional<ForwardOutput> LLMWorkerImpl::step(
     const BatchedForwardInputs& inputs) {
   device_.set_device();
   Timer timer;
-  if (!inputs.micro_inputs.empty() && inputs.micro_inputs[0].total_round > 0) {
+  // Only enter multi-round decode when explicitly enabled via global flag.
+  if (FLAGS_max_decode_rounds > 0 && !inputs.micro_inputs.empty() &&
+      inputs.micro_inputs[0].total_round > 0) {
     return step_multi_round(inputs);
   }
+  int mb_num = inputs.micro_inputs.size();
+  int32_t total_round = mb_num > 0 ? inputs.micro_inputs[0].total_round : 0;
+  int32_t beam_width = mb_num > 0 ? inputs.micro_inputs[0].beam_width : 0;
+  VLOG(1) << "[WORKER_STEP] micro_batches=" << mb_num
+          << ", total_round=" << total_round << ", beam_width=" << beam_width
+          << ", FLAGS_max_decode_rounds=" << FLAGS_max_decode_rounds;
   std::vector<torch::Tensor> flatten_tokens_micro_batches;
   std::vector<torch::Tensor> flatten_positions_micro_batches;
   std::vector<ModelInputParams> input_params_micro_batches;
@@ -95,7 +103,8 @@ std::optional<ForwardOutput> LLMWorkerImpl::step(
     input_params_micro_batches.push_back(
         std::move(inputs.micro_inputs[i].input_params));
 
-    if (options_.kv_cache_transfer_mode() == "PUSH" &&
+    if (options_.instance_role() == InstanceRole::PREFILL &&
+        options_.kv_cache_transfer_mode() == "PUSH" &&
         !inputs.micro_inputs[i].transfer_kv_infos.empty()) {
 #if defined(USE_NPU)
       std::shared_ptr<NPULayerSynchronizerImpl> layer_synchronizer =
@@ -147,7 +156,8 @@ std::optional<ForwardOutput> LLMWorkerImpl::step(
     // in p-d disaggregation scene, all micro batches should be in same
     // prefill/decode stage, so, to judge transfer_kv_infos.empty,
     // just use micro inputs.micro_inputs[0] here
-    if (options_.kv_cache_transfer_mode() == "PUSH" &&
+    if (options_.instance_role() == InstanceRole::PREFILL &&
+        options_.kv_cache_transfer_mode() == "PUSH" &&
         !inputs.micro_inputs[0].transfer_kv_infos.empty()) {
       auto results =
           folly::collectAll(futures).within(std::chrono::seconds(60)).get();
@@ -173,7 +183,7 @@ std::optional<ForwardOutput> LLMWorkerImpl::step(
     // beam search kernel
     BeamSearchOutput beam_search_output;
     if (concated_sampling_params.use_beam_search &&
-        inputs.acc_logprob.defined() && inputs.acc_logprob.numel() > 0) {
+        inputs.acc_logprob.numel() > 0) {
       beam_search_output = beam_searcher_->forward(inputs.acc_logprob,
                                                    sample_output.top_tokens,
                                                    sample_output.top_logprobs);
@@ -223,7 +233,8 @@ std::optional<ForwardOutput> LLMWorkerImpl::step(
 
   auto ret = device_.synchronize_default_stream();
 
-  if (options_.kv_cache_transfer_mode() == "PUSH" &&
+  if (options_.instance_role() == InstanceRole::PREFILL &&
+      options_.kv_cache_transfer_mode() == "PUSH" &&
       !inputs.micro_inputs[0].transfer_kv_infos.empty()) {
     auto results =
         folly::collectAll(futures).within(std::chrono::seconds(60)).get();

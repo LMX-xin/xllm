@@ -17,6 +17,7 @@ limitations under the License.
 
 #include <unordered_set>
 
+#include "core/common/global_flags.h"
 #include "framework/batch/beam_search.h"
 #include "util/blocking_counter.h"
 #include "util/slice.h"
@@ -92,13 +93,15 @@ bool SequencesGroup::expand_sequences(bool share_prefix) {
 void SequencesGroup::generate_outputs(std::vector<SequenceOutput>& outputs,
                                       const Tokenizer& tokenizer,
                                       ThreadPool* thread_pool) {
-  if (check_beam_search() && sequences_.size() == 1) {
-    auto* base = sequences_[0].get();
-    if (base->has_beam_result()) {
-      return generate_multi_round_output(outputs, tokenizer, *base);
-    } else {
-      LOG(ERROR) << "SequencesGroup::generate_outputs, beam search is not "
-                    "enabled, but has beam result";
+  if (FLAGS_max_decode_rounds > 0) {
+    if (check_beam_search() && sequences_.size() == 1) {
+      auto* base = sequences_[0].get();
+      if (base->has_beam_result()) {
+        return generate_multi_round_output(outputs, tokenizer, *base);
+      } else {
+        LOG(ERROR) << "SequencesGroup::generate_outputs, beam search is not "
+                      "enabled, but has beam result";
+      }
     }
   }
   // here
@@ -186,27 +189,29 @@ void SequencesGroup::process_beam_search() {
     return;
   }
 
-  if (sequences_.size() == 1) {
-    auto* base = sequences_[0].get();
-    if (base->has_beam_result()) {
-      int32_t bw = base->beam_width_cached();
-      int32_t rounds = base->total_rounds_cached();
-      const auto& flat2d = base->beam_seq_group_flat();
-      const auto& last_lps = base->beam_last_logprobs();
-      std::vector<std::unique_ptr<Sequence>> result;
-      result.reserve(static_cast<size_t>(bw));
-      for (int b = 0; b < bw; ++b) {
-        auto cloned = std::make_unique<Sequence>(*base);
-        int last = std::max(0, rounds - 1);
-        Token new_token(flat2d[b][last]);
-        if (static_cast<size_t>(b) < last_lps.size()) {
-          new_token.logprob = last_lps[b];
+  if (FLAGS_max_decode_rounds > 0) {
+    if (sequences_.size() == 1) {
+      auto* base = sequences_[0].get();
+      if (base->has_beam_result()) {
+        int32_t bw = base->beam_width_cached();
+        int32_t rounds = base->total_rounds_cached();
+        const auto& flat2d = base->beam_seq_group_flat();
+        const auto& last_lps = base->beam_last_logprobs();
+        std::vector<std::unique_ptr<Sequence>> result;
+        result.reserve(static_cast<size_t>(bw));
+        for (int b = 0; b < bw; ++b) {
+          auto cloned = std::make_unique<Sequence>(*base);
+          int last = std::max(0, rounds - 1);
+          Token new_token(flat2d[b][last]);
+          if (static_cast<size_t>(b) < last_lps.size()) {
+            new_token.logprob = last_lps[b];
+          }
+          cloned->append_token(new_token);
+          result.emplace_back(std::move(cloned));
         }
-        cloned->append_token(new_token);
-        result.emplace_back(std::move(cloned));
+        sequences_.swap(result);
+        return;
       }
-      sequences_.swap(result);
-      return;
     }
   }
 
@@ -223,7 +228,8 @@ void SequencesGroup::process_beam_search() {
     result.reserve(num_candidates);
 
     int32_t last_token_idx = sequences_[0]->num_tokens() - 1;
-    size_t k = beam_width;
+    size_t k =
+        FLAGS_max_decode_rounds > 0 ? beam_width : std::min(topk, beam_width);
     for (size_t i = 0; i < seq_size; i++) {
       std::unique_ptr<Sequence>& seq = sequences_[i];
       auto src_blocks = seq->kv_state().kv_blocks();
@@ -337,10 +343,10 @@ void SequencesGroup::generate_multi_round_output(
     const Tokenizer& tokenizer,
     const Sequence& base) {
   VLOG(1) << "[debug_1111]generate_multi_round_output, bw: "
-             << base.beam_width_cached()
-             << ", total_rounds: " << base.total_rounds_cached()
-             << ", flat.size(): " << base.beam_seq_group_flat().size()
-             << ", last_logprobs.size(): " << base.beam_last_logprobs().size();
+          << base.beam_width_cached()
+          << ", total_rounds: " << base.total_rounds_cached()
+          << ", flat.size(): " << base.beam_seq_group_flat().size()
+          << ", last_logprobs.size(): " << base.beam_last_logprobs().size();
   size_t bw = static_cast<size_t>(base.beam_width_cached());
   const auto& last_lps = base.beam_last_logprobs();
   std::vector<std::pair<float, size_t>> rank;
@@ -373,7 +379,7 @@ void SequencesGroup::generate_multi_round_output(
     outputs.push_back(std::move(out));
   }
   VLOG(1) << "[debug_1111]generate_multi_round_output, outputs.size(): "
-             << outputs.size();
+          << outputs.size();
 }
 
 void SequencesGroup::finish() {

@@ -102,7 +102,7 @@ RawForwardInput BatchInputBuilder::build_raw_forward_input(uint32_t start_idx,
   } else {
     process_sequences_multithreaded(start_idx, end_idx);
   }
-  return state_to_raw_forward_input(nullptr);
+  return state_to_raw_forward_input();
 }
 
 void BatchInputBuilder::process_sequences(uint32_t start_idx,
@@ -110,7 +110,6 @@ void BatchInputBuilder::process_sequences(uint32_t start_idx,
   for (int32_t i = start_idx; i < end_idx; ++i) {
     process_single_sequence(i);
   }
-  // VLOG(1) << "process_sequences sequences_.size(): " << sequences_.size();
 }
 
 void BatchInputBuilder::process_sequences_multithreaded(uint32_t start_idx,
@@ -265,27 +264,14 @@ void BatchInputBuilder::process_single_sequence(
   const auto token_ids = sequence->tokens();
   const uint32_t n_tokens = token_ids.size();
   const uint32_t n_kv_cache_tokens = sequence->kv_state().kv_cache_tokens_num();
-  // LOG(INFO) << "n_tokens: " << n_tokens << ", n_kv_cache_tokens: " <<
-  // n_kv_cache_tokens; Validate and calculate sequence lengths
-  CHECK(allowed_max_tokens_[seq_index] > 0);
-  uint32_t q_seq_len =
-      std::min(n_tokens - n_kv_cache_tokens, allowed_max_tokens_[seq_index]);
-  uint32_t seq_len = q_seq_len + n_kv_cache_tokens;
 
-  // Step-level 解码阶段强制至少单步解码：当差值为 0 时补 1；当差值>1 时裁剪为 1
-  const bool in_step_decode = sequence->in_step_decode_round();
-  if (in_step_decode) {
-    if (q_seq_len == 0 && allowed_max_tokens_[seq_index] > 0) {
-      q_seq_len = 1;
-      seq_len = n_kv_cache_tokens + 1;
-    } else if (q_seq_len > 1) {
-      q_seq_len = 1;
-      seq_len = n_kv_cache_tokens + 1;
-    }
-  }
+  // Validate and calculate sequence lengths
+  CHECK(allowed_max_tokens_[seq_index] > 0);
+  const uint32_t q_seq_len =
+      std::min(n_tokens - n_kv_cache_tokens, allowed_max_tokens_[seq_index]);
+  const uint32_t seq_len = q_seq_len + n_kv_cache_tokens;
 
   // Validation
-  // LOG(INFO) << "q_seq_len: " << seq_len << ", q_seq_len: " << q_seq_len;
   CHECK_GE(sequence->kv_state().current_max_tokens_capacity(), seq_len);
   CHECK_GT(q_seq_len, 0) << "at least one token should be processed. "
                          << "n_tokens: " << n_tokens
@@ -307,8 +293,7 @@ void BatchInputBuilder::process_single_sequence(
   state.q_seq_lens.push_back(state.q_seq_lens.back() + q_seq_len);
 #endif
   // Process tokens and positions
-  extract_tokens_and_positions(
-      sequence, n_kv_cache_tokens, seq_len, state_ptr, in_step_decode);
+  extract_tokens_and_positions(sequence, n_kv_cache_tokens, seq_len, state_ptr);
 
   // Setup KV cache
   if (!FLAGS_enable_continuous_kvcache) {
@@ -329,25 +314,18 @@ void BatchInputBuilder::process_single_sequence(
   }
 
   // Input for beam search kernel
-  if (FLAGS_enable_beam_search_kernel && sequence->check_beam_search()) {
-    // 在 step-level decode 轮次，始终提供 acc_logprob，避免后续轮次为空
-    if (sequence->in_step_decode_round()) {
-      state.acc_logprob_vec.push_back(sequence->get_average_logprob() *
-                                      sequence->num_generated_tokens());
-    } else if (sequence->num_generated_tokens() > 0) {
-      state.acc_logprob_vec.push_back(sequence->get_average_logprob() *
-                                      sequence->num_generated_tokens());
-    }
+  if (FLAGS_enable_beam_search_kernel && sequence->check_beam_search() &&
+      sequence->num_generated_tokens() > 0) {
+    state.acc_logprob_vec.push_back(sequence->get_average_logprob() *
+                                    sequence->num_generated_tokens());
   }
 }
 
 void BatchInputBuilder::extract_tokens_and_positions(Sequence* sequence,
                                                      uint32_t n_kv_cache_tokens,
                                                      uint32_t seq_len,
-                                                     BuilderState* state_ptr,
-                                                     bool in_beam_decode) {
+                                                     BuilderState* state_ptr) {
   BuilderState& state = state_ptr ? *state_ptr : state_;
-  const size_t selected_size_before = state.selected_token_idxes.size();
 
   const auto& token_ids = sequence->tokens();
   const uint32_t n_tokens = token_ids.size();
@@ -356,9 +334,7 @@ void BatchInputBuilder::extract_tokens_and_positions(Sequence* sequence,
   std::unordered_map<int32_t, int32_t> adjusted_token_to_count_map;
   for (uint32_t j = n_kv_cache_tokens; j < seq_len; ++j) {
     // skip prompt tokens except the last one
-    // 在 step-level decode
-    // 轮次(in_beam_decode=true)需要对占位位置也生成采样参数
-    if (!in_beam_decode && j + 1 < n_tokens) continue;
+    if (j + 1 < n_tokens) continue;
     ++adjusted_token_to_count_map[token_ids[j]];
   }
 
@@ -371,25 +347,13 @@ void BatchInputBuilder::extract_tokens_and_positions(Sequence* sequence,
 
   // Process each token
   for (uint32_t j = n_kv_cache_tokens; j < seq_len; ++j) {
-    int32_t token_to_push;
-    if (in_beam_decode && n_kv_cache_tokens == n_tokens &&
-        seq_len == n_kv_cache_tokens + 1) {
-      // 第二次及后续 decode 若未把上轮 token
-      // 写入全局序列，这里使用“最后一个已生成 token”作为输入 保证 q_seq_len=1
-      // 且不访问越界
-      token_to_push = token_ids[n_tokens - 1];
-    } else {
-      token_to_push = token_ids[j];
-    }
-    state.flatten_tokens_vec.push_back(token_to_push);
+    state.flatten_tokens_vec.push_back(token_ids[j]);
 
     if (!use_mrope_) {
       state.flatten_positions_vec.push_back(static_cast<int32_t>(j));
     }
 
     // Handle sampling for last tokens
-    // step-level decode 也需要采样参数以驱动 beam kernel
-    // 不再跳过占位输入，允许占位 token 参与采样参数选择
     if (j + 1 < n_tokens) continue;
 
     handle_sampling_parameters(
@@ -397,37 +361,13 @@ void BatchInputBuilder::extract_tokens_and_positions(Sequence* sequence,
   }
 
   // Add extra token id
-  if (in_beam_decode) {
-    // beam decode 使用 step-level cache，不读取 seq_len 位置 token，固定 -1
+  if (n_tokens == seq_len) {
+    // last chunk of prefill and decode
+    // add -1 as extra token id
     state.extra_token_ids.push_back(-1);
     state.embedding_ids.push_back(sequence->get_embedding_id());
   } else {
-    if (n_tokens == seq_len) {
-      // last chunk of prefill and decode
-      // add -1 as extra token id
-      state.extra_token_ids.push_back(-1);
-      state.embedding_ids.push_back(sequence->get_embedding_id());
-    } else {
-      state.extra_token_ids.push_back(token_ids[seq_len]);
-    }
-  }
-
-  // Fallback：step-level decode 时若本序列本轮没有任何采样位点，则对齐到“额外
-  // token 槽”
-  if (in_beam_decode &&
-      state.selected_token_idxes.size() == selected_size_before) {
-    const int32_t sel_idx =
-        static_cast<int32_t>(state.flatten_tokens_vec.size());
-    state.selected_token_idxes.push_back(sel_idx);
-    state.sampling_params.push_back(sequence->sampling_param());
-    state.unique_token_ids_vec.emplace_back();
-    state.unique_token_counts_vec.emplace_back();
-    state.unique_token_lens_vec.push_back(0);
-    state.sample_idxes.push_back(
-        static_cast<int32_t>(state.selected_token_idxes.size() - 1));
-    // VLOG(1) << "[SEL/FALLBACK] seq_id=" << sequence->seq_id()
-    //         << " sel_idx=" << sel_idx
-    //         << " selected_size=" << state.selected_token_idxes.size();
+    state.extra_token_ids.push_back(token_ids[seq_len]);
   }
 }
 
@@ -448,10 +388,6 @@ void BatchInputBuilder::handle_sampling_parameters(
   // Select token for sampling
   state.selected_token_idxes.push_back(state.flatten_tokens_vec.size() - 1);
   state.sampling_params.push_back(sequence->sampling_param());
-  // VLOG for debugging if needed
-  // VLOG(1) << "[SEL/HANDLE] seq_id=" << sequence->seq_id()
-  //         << " selected_idx=" << (state.flatten_tokens_vec.size() - 1)
-  //         << " selected_size=" << state.selected_token_idxes.size();
 
   // Process unique tokens
   const auto& seq_token_counts = sequence->token_to_count_map();
@@ -495,21 +431,14 @@ void BatchInputBuilder::setup_kv_cache_info(
   std::unordered_set<int32_t>& write_block_ids =
       write_block_ids_ptr ? *write_block_ids_ptr : write_block_ids_;
 
-  // Step-level decode rounds use step-level decode cache, must NOT mutate
-  // global KV.
-  const bool in_step_decode = sequence->in_step_decode_round();
-  if (!in_step_decode) {
-    // update kv cache tokens num only for non-beam or prefill
-    sequence->kv_state().incr_kv_cache_tokens_num(/*size=*/q_seq_len);
-  }
+  // update kv cache tokens num
+  sequence->kv_state().incr_kv_cache_tokens_num(/*size=*/q_seq_len);
 
   const auto blocks = sequence->kv_state().kv_blocks();
-  if (!in_step_decode) {
-    const auto slot_ids =
-        sequence->kv_state().kv_cache_slots(n_kv_cache_tokens, seq_len);
-    state.new_token_slot_ids.insert(
-        state.new_token_slot_ids.end(), slot_ids.begin(), slot_ids.end());
-  }
+  const auto slot_ids =
+      sequence->kv_state().kv_cache_slots(n_kv_cache_tokens, seq_len);
+  state.new_token_slot_ids.insert(
+      state.new_token_slot_ids.end(), slot_ids.begin(), slot_ids.end());
 
   std::vector<int32_t> block_ids;
   std::vector<uint64_t> u_block_ids;
@@ -521,13 +450,11 @@ void BatchInputBuilder::setup_kv_cache_info(
     u_block_ids.emplace_back(block.id());
   }
 
-  if (!in_step_decode) {
-    int32_t kv_cache_block_idx = n_kv_cache_tokens / block_size;
-    for (auto iter = block_ids.begin() + kv_cache_block_idx;
-         iter != block_ids.end();
-         ++iter) {
-      write_block_ids.insert(*iter);
-    }
+  int32_t kv_cache_block_idx = n_kv_cache_tokens / block_size;
+  for (auto iter = block_ids.begin() + kv_cache_block_idx;
+       iter != block_ids.end();
+       ++iter) {
+    write_block_ids.insert(*iter);
   }
 
   auto& transfer_kv_info = sequence->kv_state().transfer_kv_info();
@@ -536,10 +463,6 @@ void BatchInputBuilder::setup_kv_cache_info(
     state.transfer_kv_infos.back().local_blocks_ids = std::move(u_block_ids);
   }
 
-  // For step-level decode, do not allocate new slots, but still pass the
-  // current block table so kernels can correctly read existing KV. This keeps
-  // decode's block table equal to prefill within the same step and avoids
-  // creating an empty [1, 0] tensor.
   state.block_tables_vec.emplace_back(std::move(block_ids));
 }
 
@@ -550,33 +473,22 @@ void BatchInputBuilder::setup_continuous_kv_cache_info(
     uint32_t q_seq_len,
     BuilderState* state_ptr) {
   BuilderState& state = state_ptr ? *state_ptr : state_;
-  // Step-level decode rounds use step-level decode cache, must NOT mutate
-  // global KV.
-  const bool in_step_decode = sequence->in_step_decode_round();
-  if (!in_step_decode) {
-    // update kv cache tokens num only for non-beam or prefill
-    sequence->kv_state().incr_kv_cache_tokens_num(/*size=*/q_seq_len);
-  }
+  // update kv cache tokens num
+  sequence->kv_state().incr_kv_cache_tokens_num(/*size=*/q_seq_len);
 
   int32_t seq_id = sequence->seq_id();
 
   int64_t kv_cache_start_offset = seq_id * FLAGS_buffer_size_per_seq;
-  if (!in_step_decode) {
-    std::vector<int64_t> cache_slot_offsets;
-    cache_slot_offsets.reserve(seq_len - n_kv_cache_tokens);
-    for (int32_t i = n_kv_cache_tokens; i < seq_len; ++i) {
-      cache_slot_offsets.push_back(kv_cache_start_offset +
-                                   i * FLAGS_cache_size_per_token);
-    }
-    state.new_cache_slot_offsets.insert(state.new_cache_slot_offsets.end(),
-                                        cache_slot_offsets.begin(),
-                                        cache_slot_offsets.end());
-    state.kv_cache_start_offsets.push_back(kv_cache_start_offset);
-  } else {
-    // Keep placeholders empty for step-level decode
-    state.new_cache_slot_offsets;
-    state.kv_cache_start_offsets;
+  std::vector<int64_t> cache_slot_offsets;
+  cache_slot_offsets.reserve(seq_len - n_kv_cache_tokens);
+  for (int32_t i = n_kv_cache_tokens; i < seq_len; ++i) {
+    cache_slot_offsets.push_back(kv_cache_start_offset +
+                                 i * FLAGS_cache_size_per_token);
   }
+  state.new_cache_slot_offsets.insert(state.new_cache_slot_offsets.end(),
+                                      cache_slot_offsets.begin(),
+                                      cache_slot_offsets.end());
+  state.kv_cache_start_offsets.push_back(kv_cache_start_offset);
 }
 
 void BatchInputBuilder::padding_decode_batch_size(
@@ -647,7 +559,7 @@ ForwardInput BatchInputBuilder::state_to_forward_input() {
       torch::tensor(state_.new_token_slot_ids, torch::kInt);
   input_params.decode_seq_range =
       util::find_ones_indices(input_params.q_seq_lens_vec);
-  LOG(INFO) << " num_sequences: " << input_params.num_sequences;
+
   // Setup multimodal data
   input_params.mm_data = MMData::batch(mm_data_vec_);
 
@@ -655,60 +567,6 @@ ForwardInput BatchInputBuilder::state_to_forward_input() {
   util::pad_2d_vector(state_.block_tables_vec, /*pad_value=*/0);
   input_params.block_tables =
       create_2d_tensor(state_.block_tables_vec, torch::kInt);
-
-  // Compact meta after prefill: keep kv_seq_lens/q_seq_lens/block_tables in
-  // original batch shape (without expanding to beam rows) when entering
-  // step-level decode with beam search enabled.
-  {
-    bool in_step_decode = false;
-    int32_t beam_width = 1;
-    if (!sequences_.empty()) {
-      in_step_decode = sequences_[0]->in_step_decode_round();
-      if (sequences_[0]->sampling_param() != nullptr) {
-        beam_width = sequences_[0]->sampling_param()->beam_width;
-      }
-    }
-    LOG(INFO) << "in_step_decode: " << in_step_decode
-              << ", beam_width: " << beam_width;
-    if (in_step_decode && beam_width > 1) {
-      // compute original batch size by collapsing beam groups
-      int64_t total_seqs = input_params.block_tables.defined()
-                               ? input_params.block_tables.size(0)
-                               : input_params.kv_seq_lens.size(0);
-      if (beam_width > 0 && total_seqs >= beam_width) {
-        int64_t batch_size = total_seqs / beam_width;
-        // build gather indices: [0, beam_width, 2*beam_width, ...]
-        std::vector<int64_t> idx_vec;
-        idx_vec.reserve(batch_size);
-        for (int64_t b = 0; b < batch_size; ++b)
-          idx_vec.push_back(b * beam_width);
-        auto idx = torch::from_blob(idx_vec.data(), {batch_size}, torch::kLong)
-                       .clone();
-
-        // kv_seq_lens/q_seq_lens -> [batch]
-        if (input_params.kv_seq_lens.defined() &&
-            input_params.kv_seq_lens.dim() == 1 &&
-            input_params.kv_seq_lens.size(0) == total_seqs) {
-          input_params.kv_seq_lens =
-              input_params.kv_seq_lens.index_select(0, idx);
-        }
-        if (input_params.q_seq_lens.defined() &&
-            input_params.q_seq_lens.dim() == 1 &&
-            input_params.q_seq_lens.size(0) == total_seqs) {
-          input_params.q_seq_lens =
-              input_params.q_seq_lens.index_select(0, idx);
-        }
-
-        // block_tables -> [batch, max_blocks]
-        if (input_params.block_tables.defined() &&
-            input_params.block_tables.dim() == 2 &&
-            input_params.block_tables.size(0) == total_seqs) {
-          input_params.block_tables =
-              input_params.block_tables.index_select(0, idx);
-        }
-      }
-    }
-  }
 
   if (input_embeddings_vec_.size() != 0) {
     input_params.input_embedding = torch::cat(input_embeddings_vec_);
@@ -731,9 +589,6 @@ ForwardInput BatchInputBuilder::state_to_forward_input() {
   CHECK_EQ(state_.sampling_params.size(), state_.selected_token_idxes.size());
   // Setup sampling parameters
   if (!state_.selected_token_idxes.empty()) {
-    LOG(INFO) << "[SEL/STATE] selected_token_idxes.size="
-              << state_.selected_token_idxes.size()
-              << " sample_idxes.size=" << state_.sample_idxes.size();
     util::pad_2d_vector<int64_t>(state_.unique_token_ids_vec, /*pad_value=*/0);
     util::pad_2d_vector(state_.unique_token_counts_vec, /*pad_value=*/0);
 
@@ -743,88 +598,67 @@ ForwardInput BatchInputBuilder::state_to_forward_input() {
                                        state_.unique_token_ids_vec,
                                        state_.unique_token_counts_vec,
                                        state_.unique_token_lens_vec);
-    if (forward_input.sampling_params.selected_token_idxes.defined()) {
-      LOG(INFO) << "[SEL/INIT] tensor.numel="
-                << forward_input.sampling_params.selected_token_idxes.size(0);
-    } else {
-      LOG(INFO) << "[SEL/INIT] tensor not defined";
-    }
   }
 
   return forward_input;
 }
 
-RawForwardInput BatchInputBuilder::state_to_raw_forward_input(
-    BatchInputBuilder::BuilderState* state_ptr) {
-  BatchInputBuilder::BuilderState& src = state_ptr ? *state_ptr : state_;
-  if (src.flatten_tokens_vec.empty()) {
+RawForwardInput BatchInputBuilder::state_to_raw_forward_input() {
+  if (state_.flatten_tokens_vec.empty()) {
     return {};
   }
   RawForwardInput raw_forward_input;
-  VLOG(1) << "[SEL/RAW] selected_token_idxes.size(before move)="
-          << src.selected_token_idxes.size();
-  raw_forward_input.flatten_tokens_vec = std::move(src.flatten_tokens_vec);
+  raw_forward_input.flatten_tokens_vec = std::move(state_.flatten_tokens_vec);
   raw_forward_input.flatten_positions_vec =
-      std::move(src.flatten_positions_vec);
-  raw_forward_input.sampling_params = std::move(src.sampling_params);
-  raw_forward_input.selected_token_idxes = std::move(src.selected_token_idxes);
-  raw_forward_input.sample_idxes = std::move(src.sample_idxes);
-  raw_forward_input.unique_token_ids_vec = std::move(src.unique_token_ids_vec);
+      std::move(state_.flatten_positions_vec);
+  raw_forward_input.sampling_params = std::move(state_.sampling_params);
+  raw_forward_input.selected_token_idxes =
+      std::move(state_.selected_token_idxes);
+  raw_forward_input.sample_idxes = std::move(state_.sample_idxes);
+  raw_forward_input.unique_token_ids_vec =
+      std::move(state_.unique_token_ids_vec);
   raw_forward_input.unique_token_counts_vec =
-      std::move(src.unique_token_counts_vec);
+      std::move(state_.unique_token_counts_vec);
   raw_forward_input.unique_token_lens_vec =
-      std::move(src.unique_token_lens_vec);
-  raw_forward_input.empty_kv_cache = src.empty_kv_cache;
+      std::move(state_.unique_token_lens_vec);
+  raw_forward_input.empty_kv_cache = state_.empty_kv_cache;
   // raw_forward_input.global_empty_kv_cache = ;
-  raw_forward_input.max_seq_len = src.max_seq_len;
-  raw_forward_input.q_max_seq_len = src.q_max_seq_len;
-  raw_forward_input.seq_lens = std::move(src.seq_lens);
-  raw_forward_input.q_seq_lens = std::move(src.q_seq_lens);
-  raw_forward_input.new_token_slot_ids = std::move(src.new_token_slot_ids);
-  raw_forward_input.block_tables_vec = std::move(src.block_tables_vec);
+  raw_forward_input.max_seq_len = state_.max_seq_len;
+  raw_forward_input.q_max_seq_len = state_.q_max_seq_len;
+  raw_forward_input.seq_lens = std::move(state_.seq_lens);
+  raw_forward_input.q_seq_lens = std::move(state_.q_seq_lens);
+  raw_forward_input.new_token_slot_ids = std::move(state_.new_token_slot_ids);
+  raw_forward_input.block_tables_vec = std::move(state_.block_tables_vec);
   raw_forward_input.num_sequences = num_sequences_;
   // raw_forward_input.dp_global_token_nums = ;
-  raw_forward_input.transfer_kv_infos = std::move(src.transfer_kv_infos);
-  raw_forward_input.prefill_seq_len = src.prefill_seq_len;
+  raw_forward_input.transfer_kv_infos = std::move(state_.transfer_kv_infos);
+  raw_forward_input.prefill_seq_len = state_.prefill_seq_len;
 
-  raw_forward_input.embedding_ids = std::move(src.embedding_ids);
-  raw_forward_input.extra_token_ids = std::move(src.extra_token_ids);
+  raw_forward_input.embedding_ids = std::move(state_.embedding_ids);
+  raw_forward_input.extra_token_ids = std::move(state_.extra_token_ids);
   // beam search kernel input
-  if (src.acc_logprob_vec.size() > 0) {
-    raw_forward_input.acc_logprob_vec = std::move(src.acc_logprob_vec);
+  if (state_.acc_logprob_vec.size() > 0) {
+    raw_forward_input.acc_logprob_vec = std::move(state_.acc_logprob_vec);
   }
 
   if (FLAGS_enable_continuous_kvcache) {
     raw_forward_input.new_cache_slot_offsets =
-        std::move(src.new_cache_slot_offsets);
+        std::move(state_.new_cache_slot_offsets);
     raw_forward_input.kv_cache_start_offsets =
-        std::move(src.kv_cache_start_offsets);
+        std::move(state_.kv_cache_start_offsets);
   }
 
   if (mm_data_vec_.size() != 0) {
     MMData mm_data = MMData::batch(mm_data_vec_);
     const auto& res = mm_data.get<torch::Tensor>("embedding");
-    if (res && res.value().defined()) {
+    if (res) {
       torch::Tensor embeddings = res.value();
-      if (embeddings.dim() == 1) {
-        if (embeddings.defined() && embeddings.numel() > 0) {
-          torch::Tensor embedding = embeddings.to(torch::kFloat32);
-          Slice<float> embedding_slice = {embedding.data_ptr<float>(),
-                                          embedding.size(0)};
-          raw_forward_input.embeddings.push_back(embedding_slice);
-        }
-      } else if (embeddings.dim() >= 2) {
-        for (int64_t output_idx = 0; output_idx < embeddings.size(0);
-             ++output_idx) {
-          torch::Tensor embedding = embeddings[output_idx];
-          if (!embedding.defined() || embedding.numel() == 0) {
-            continue;
-          }
-          embedding = embedding.to(torch::kFloat32);
-          Slice<float> embedding_slice = {embedding.data_ptr<float>(),
-                                          embedding.size(0)};
-          raw_forward_input.embeddings.push_back(embedding_slice);
-        }
+      for (int64_t output_idx = 0; output_idx < embeddings.size(0);
+           ++output_idx) {
+        torch::Tensor embedding = embeddings[output_idx].to(torch::kFloat32);
+        Slice<float> embedding_slice = {embedding.data_ptr<float>(),
+                                        embedding.size(0)};
+        raw_forward_input.embeddings.push_back(embedding_slice);
       }
     }
   }

@@ -189,8 +189,11 @@ void NpuQwen3DecoderLayerImpl::param_from_args(
   param.isBF16 = args.dtype() == "bfloat16";
   param.enableSplitFuse = FLAGS_enable_chunked_prefill && isPrefill;
   param.loraEnableGMM = false;
-  param.isEnableDecodeKvCache = true;
-  param.enablePrefillKeyValue = true;
+  // Only enable advanced decode KV cache optimizations in multi-round mode.
+  if (FLAGS_max_decode_rounds > 0) {
+    param.isEnableDecodeKvCache = true;
+    param.enablePrefillKeyValue = true;
+  }
 
   param.linearTransposeType = {1, -1, -1, 1, 1, -1, 1};
   param.quantGroupSize = 0;
@@ -486,7 +489,13 @@ torch::Tensor NpuQwen3DecoderLayerImpl::forward(
     std::vector<std::atomic<bool>*> event_flag,
     int node_id) {
   atb::Status st;
-  if (input_params[0].is_prefill) {
+  // For legacy single-round decode, rely on decode_seq_range semantics to
+  // decide prefill vs decode; for multi-round mode, use explicit is_prefill.
+  bool is_prefill = (FLAGS_max_decode_rounds > 0)
+                        ? input_params[0].is_prefill
+                        : (input_params[0].decode_seq_range.second !=
+                           input_params[0].q_seq_lens.size(0) - 1);
+  if (is_prefill) {
     // if (input_params.empty_kv_cache) {
     // mstxRangeId id = mstxRangeStartA("prefill build variant", nullptr);
     build_node_variant_pack(prefill_node_,
@@ -496,7 +505,7 @@ torch::Tensor NpuQwen3DecoderLayerImpl::forward(
                             attn_mask,
                             kv_cache,
                             input_params,
-                            true,
+                            /*is_prefill=*/true,
                             node_id);
     // mstxRangeEnd(id);
     st = execute_node(prefill_node_, node_id, event, event_flag);
@@ -512,7 +521,7 @@ torch::Tensor NpuQwen3DecoderLayerImpl::forward(
                             decode_attn_masks,
                             kv_cache,
                             input_params,
-                            false,
+                            /*is_prefill=*/false,
                             node_id);
     st = execute_node(decode_node_, node_id + 1000, event, event_flag);
     LOG_IF(FATAL, st != 0) << model_name_
@@ -555,7 +564,7 @@ void NpuQwen3DecoderLayerImpl::build_node_variant_pack(
   node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 8) = placeholder_;
   node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 9) =
       atb_speed::Utils::AtTensor2Tensor(input_params[0].block_tables);
-  if (!is_prefill || FLAGS_max_decode_rounds > 0) {
+  if (FLAGS_max_decode_rounds > 0) {
     node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 10) = placeholder_;
   } else {
     node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 10) =
@@ -641,16 +650,21 @@ void NpuQwen3DecoderLayerImpl::build_node_variant_pack(
       }
     }
   }
-  node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 11) =
-      atb_speed::Utils::AtTensor2Tensor(
-          input_params[0].shared_k_caches[node_id]);
-  node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 12) =
-      atb_speed::Utils::AtTensor2Tensor(
-          input_params[0].shared_v_caches[node_id]);
-  node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 13) =
-      atb_speed::Utils::AtTensor2Tensor(input_params[0].beam_width_tensor);
-  node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 14) =
-      atb_speed::Utils::AtTensor2Tensor(input_params[0].current_round_tensor);
+  // Step-level decode metadata and shared KV caches are only meaningful in
+  // multi-round mode. Avoid touching these slots in legacy single-round mode
+  // to keep the original ATB graph argument layout.
+  if (FLAGS_max_decode_rounds > 0) {
+    node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 11) =
+        atb_speed::Utils::AtTensor2Tensor(
+            input_params[0].shared_k_caches[node_id]);
+    node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 12) =
+        atb_speed::Utils::AtTensor2Tensor(
+            input_params[0].shared_v_caches[node_id]);
+    node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 13) =
+        atb_speed::Utils::AtTensor2Tensor(input_params[0].beam_width_tensor);
+    node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 14) =
+        atb_speed::Utils::AtTensor2Tensor(input_params[0].current_round_tensor);
+  }
 
   for (size_t i = 0; i < WEIGHT_COUNT_PER_LAYER; ++i) {
     CHECK_THROW(node.inTensors.at(i) == nullptr,

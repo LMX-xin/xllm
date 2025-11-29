@@ -19,6 +19,7 @@ limitations under the License.
 #include <torch/torch.h>
 
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -38,6 +39,10 @@ limitations under the License.
 
 namespace xllm {
 
+// Forward declaration from batch_input_builder.cpp, in the same namespace.
+void split_copy_out_blocks(RawForwardInput& raw_forward_input,
+                           std::unordered_set<int32_t>& write_block_ids);
+
 MultiStepBatchInputBuilder::MultiStepBatchInputBuilder(
     const std::vector<Sequence*>& sequences,
     const std::vector<uint32_t>& allowed_max_tokens,
@@ -48,15 +53,19 @@ MultiStepBatchInputBuilder::MultiStepBatchInputBuilder(
     std::vector<CacheBlockInfo>* swap_cache_block_infos,
     const ModelArgs* args,
     ThreadPool* thread_pool)
-    : BatchInputBuilder(sequences,
-                        allowed_max_tokens,
-                        input_embeddings_vec,
-                        mm_data_vec,
-                        copy_in_cache_block_infos,
-                        copy_out_cache_block_infos,
-                        swap_cache_block_infos,
-                        args,
-                        thread_pool) {
+    : sequences_(sequences),
+      allowed_max_tokens_(allowed_max_tokens),
+      input_embeddings_vec_(input_embeddings_vec),
+      mm_data_vec_(mm_data_vec),
+      args_(args),
+      num_sequences_(static_cast<int32_t>(sequences.size())),
+      copy_in_cache_block_infos_(copy_in_cache_block_infos),
+      copy_out_cache_block_infos_(copy_out_cache_block_infos),
+      swap_cache_block_infos_(swap_cache_block_infos),
+      thread_pool_(thread_pool) {
+  if (args_ != nullptr) {
+    use_mrope_ = (args_->rope_scaling_rope_type() == "mrope");
+  }
   // Initialize MultiStep specific state
   multi_step_state_.total_steps = FLAGS_max_decode_rounds;
   // multi_step_state_.step_tokens_vec.reserve(1000);
@@ -66,10 +75,10 @@ MultiStepBatchInputBuilder::MultiStepBatchInputBuilder(
 
 void MultiStepBatchInputBuilder::process_single_sequence(
     int32_t seq_index,
-    BatchInputBuilder::BuilderState* state_ptr,
+    BuilderState* state_ptr,
     std::unordered_set<int32_t>* write_block_ids_ptr) {
   MultiStepBuilderState& state = multi_step_state_;
-  BatchInputBuilder::BuilderState& base_state = state.base_state;
+  BuilderState& base_state = state.base_state;
 
   auto* sequence = sequences_[seq_index];
   const auto token_ids = sequence->tokens();
@@ -150,14 +159,111 @@ void MultiStepBatchInputBuilder::process_single_sequence(
   // Multi-step specific processing
 }
 
+RawForwardInput MultiStepBatchInputBuilder::build_raw_forward_input(
+    uint32_t start_idx,
+    uint32_t end_idx) {
+  // Reset multi-step state for this build
+  multi_step_state_ = MultiStepBuilderState{};
+  multi_step_state_.total_steps = FLAGS_max_decode_rounds;
+
+  // Single-threaded processing for now; can be extended to use thread_pool_
+  for (int32_t i = static_cast<int32_t>(start_idx);
+       i < static_cast<int32_t>(end_idx);
+       ++i) {
+    process_single_sequence(
+        i, &multi_step_state_.base_state, &write_block_ids_);
+  }
+
+  return state_to_raw_forward_input(&multi_step_state_.base_state);
+}
+
 void MultiStepBatchInputBuilder::extract_tokens_and_positions(
     Sequence* sequence,
     uint32_t n_kv_cache_tokens,
     uint32_t seq_len,
     MultiStepBuilderState* state_ptr) {
-  // First call the base class implementation with in_step_decode=false
-  BatchInputBuilder::extract_tokens_and_positions(
-      sequence, n_kv_cache_tokens, seq_len, &state_ptr->base_state, false);
+  // First build the "base" view that matches the single-round builder
+  BuilderState& base_state = state_ptr->base_state;
+
+  const auto& token_ids = sequence->tokens();
+  const uint32_t n_tokens = token_ids.size();
+
+  // Prepare adjusted token counts for sampling
+  std::unordered_map<int32_t, int32_t> adjusted_token_to_count_map;
+  for (uint32_t j = n_kv_cache_tokens; j < seq_len; ++j) {
+    // skip prompt tokens except the last one
+    if (j + 1 < n_tokens) continue;
+    ++adjusted_token_to_count_map[token_ids[j]];
+  }
+
+  // Handle MRope positions
+  if (use_mrope_) {
+    const auto& args = *args_;
+    MPositionHelper helper(*sequence, args);
+    base_state.mrope_positions_vec.push_back(helper.get_positions());
+  }
+
+  // Process each token
+  for (uint32_t j = n_kv_cache_tokens; j < seq_len; ++j) {
+    base_state.flatten_tokens_vec.push_back(token_ids[j]);
+
+    if (!use_mrope_) {
+      base_state.flatten_positions_vec.push_back(static_cast<int32_t>(j));
+    }
+
+    // Handle sampling for last tokens
+    if (j + 1 < n_tokens) continue;
+
+    // Inlined sampling/unique-token logic on base_state.
+    BuilderState& state = base_state;
+
+    const auto token_id = sequence->tokens()[j];
+    // Adjust token count
+    --adjusted_token_to_count_map[token_id];
+
+    // Select token for sampling
+    state.selected_token_idxes.push_back(
+        static_cast<int32_t>(state.flatten_tokens_vec.size() - 1));
+    state.sampling_params.push_back(sequence->sampling_param());
+
+    // Process unique tokens
+    const auto& seq_token_counts = sequence->token_to_count_map();
+    auto& ids = state.unique_token_ids_vec.emplace_back();
+    auto& counts = state.unique_token_counts_vec.emplace_back();
+
+    ids.reserve(seq_token_counts.size());
+    counts.reserve(seq_token_counts.size());
+
+    for (const auto& [tok_id, count] : seq_token_counts) {
+      const auto it = adjusted_token_to_count_map.find(tok_id);
+      const auto adjust_count =
+          (it != adjusted_token_to_count_map.end()) ? it->second : 0;
+
+      if (count > adjust_count) {
+        ids.push_back(tok_id);
+        counts.push_back(count - adjust_count);
+      }
+    }
+
+    state.unique_token_lens_vec.push_back(static_cast<int32_t>(ids.size()));
+
+    // Mark sample token if it's the last token
+    if (j == seq_len - 1) {
+      state.sample_idxes.push_back(
+          static_cast<int32_t>(state.selected_token_idxes.size() - 1));
+    }
+  }
+
+  // Add extra token id
+  if (n_tokens == seq_len) {
+    // last chunk of prefill and decode
+    // add -1 as extra token id
+    base_state.extra_token_ids.push_back(-1);
+    base_state.embedding_ids.push_back(sequence->get_embedding_id());
+  } else {
+    base_state.extra_token_ids.push_back(token_ids[seq_len]);
+  }
+
   // begin process decode data
   seq_len = n_kv_cache_tokens + 1;
   // std::unordered_map<int32_t, int32_t> adjusted_token_to_count_map;
@@ -210,10 +316,10 @@ void MultiStepBatchInputBuilder::setup_kv_cache_info(
     uint32_t n_kv_cache_tokens,
     uint32_t seq_len,
     uint32_t q_seq_len,
-    BatchInputBuilder::BuilderState* state_ptr,
+    BuilderState* state_ptr,
     std::unordered_set<int32_t>* write_block_ids_ptr) {
-  BatchInputBuilder::BuilderState& state =
-      state_ptr ? *state_ptr : this->state_;
+  (void)write_block_ids_ptr;
+  BuilderState& state = *state_ptr;
   const auto blocks = sequence->kv_state().kv_blocks();
   std::vector<int32_t> block_ids;
   block_ids.reserve(blocks.size());
@@ -228,7 +334,7 @@ void MultiStepBatchInputBuilder::setup_continuous_kv_cache_info(
     uint32_t n_kv_cache_tokens,
     uint32_t seq_len,
     uint32_t q_seq_len,
-    BatchInputBuilder::BuilderState* state_ptr) {
+    BuilderState* state_ptr) {
   (void)sequence;
   (void)n_kv_cache_tokens;
   (void)seq_len;
@@ -237,8 +343,9 @@ void MultiStepBatchInputBuilder::setup_continuous_kv_cache_info(
 }
 
 ForwardInput MultiStepBatchInputBuilder::state_to_forward_input() {
-  // First call the base class implementation to get the basic ForwardInput
-  ForwardInput forward_input = BatchInputBuilder::state_to_forward_input();
+  // No current caller relies on the ForwardInput path for multi-step;
+  // keep a minimal implementation that mirrors the RawForwardInput metadata.
+  ForwardInput forward_input;
 
   // Add multi-step specific data using existing ForwardInput fields
   auto& multi_step_state = multi_step_state_;
@@ -256,7 +363,8 @@ ForwardInput MultiStepBatchInputBuilder::state_to_forward_input() {
     int64_t batch_size = static_cast<int64_t>(sequences_.size());
     int64_t step_rounds = static_cast<int64_t>(multi_step_state.total_steps);
 
-    int64_t n_kv_heads = args_ ? args_->n_kv_heads().value_or(args_->n_heads()) : 0;
+    int64_t n_kv_heads =
+        args_ ? args_->n_kv_heads().value_or(args_->n_heads()) : 0;
     int64_t head_dim = args_ ? args_->head_dim() : 0;
 
     forward_input.shared_kv_shape = {
@@ -286,11 +394,143 @@ ForwardInput MultiStepBatchInputBuilder::state_to_forward_input() {
 }
 
 RawForwardInput MultiStepBatchInputBuilder::state_to_raw_forward_input(
-    BatchInputBuilder::BuilderState* state_ptr) {
-  // First call the base class implementation to get the basic RawForwardInput
-  RawForwardInput raw_forward_input =
-      BatchInputBuilder::state_to_raw_forward_input(
-          state_ptr ? state_ptr : &multi_step_state_.base_state);
+    BuilderState* state_ptr) {
+  BuilderState& src = state_ptr ? *state_ptr : multi_step_state_.base_state;
+  if (src.flatten_tokens_vec.empty()) {
+    return {};
+  }
+  RawForwardInput raw_forward_input;
+  VLOG(1) << "[SEL/RAW] selected_token_idxes.size(before move)="
+          << src.selected_token_idxes.size();
+  raw_forward_input.flatten_tokens_vec = std::move(src.flatten_tokens_vec);
+  raw_forward_input.flatten_positions_vec =
+      std::move(src.flatten_positions_vec);
+  raw_forward_input.sampling_params = std::move(src.sampling_params);
+  raw_forward_input.selected_token_idxes = std::move(src.selected_token_idxes);
+  raw_forward_input.sample_idxes = std::move(src.sample_idxes);
+  raw_forward_input.unique_token_ids_vec = std::move(src.unique_token_ids_vec);
+  raw_forward_input.unique_token_counts_vec =
+      std::move(src.unique_token_counts_vec);
+  raw_forward_input.unique_token_lens_vec =
+      std::move(src.unique_token_lens_vec);
+  raw_forward_input.empty_kv_cache = src.empty_kv_cache;
+  raw_forward_input.max_seq_len = src.max_seq_len;
+  raw_forward_input.q_max_seq_len = src.q_max_seq_len;
+  raw_forward_input.seq_lens = std::move(src.seq_lens);
+  raw_forward_input.q_seq_lens = std::move(src.q_seq_lens);
+  raw_forward_input.new_token_slot_ids = std::move(src.new_token_slot_ids);
+  raw_forward_input.block_tables_vec = std::move(src.block_tables_vec);
+  raw_forward_input.num_sequences = num_sequences_;
+  raw_forward_input.transfer_kv_infos = std::move(src.transfer_kv_infos);
+  raw_forward_input.prefill_seq_len = src.prefill_seq_len;
+
+  raw_forward_input.embedding_ids = std::move(src.embedding_ids);
+  raw_forward_input.extra_token_ids = std::move(src.extra_token_ids);
+  // beam search kernel input
+  if (!src.acc_logprob_vec.empty()) {
+    raw_forward_input.acc_logprob_vec = std::move(src.acc_logprob_vec);
+  }
+
+  if (FLAGS_enable_continuous_kvcache) {
+    raw_forward_input.new_cache_slot_offsets =
+        std::move(src.new_cache_slot_offsets);
+    raw_forward_input.kv_cache_start_offsets =
+        std::move(src.kv_cache_start_offsets);
+  }
+
+  if (!mm_data_vec_.empty()) {
+    MMData mm_data = MMData::batch(mm_data_vec_);
+    const auto& res = mm_data.get<torch::Tensor>("embedding");
+    if (res && res.value().defined()) {
+      if (FLAGS_max_decode_rounds > 0) {
+        torch::Tensor embeddings = res.value();
+        if (embeddings.dim() == 1) {
+          if (embeddings.defined() && embeddings.numel() > 0) {
+            torch::Tensor embedding = embeddings.to(torch::kFloat32);
+            Slice<float> embedding_slice = {embedding.data_ptr<float>(),
+                                            embedding.size(0)};
+            raw_forward_input.embeddings.push_back(embedding_slice);
+          }
+        } else if (embeddings.dim() >= 2) {
+          for (int64_t output_idx = 0; output_idx < embeddings.size(0);
+               ++output_idx) {
+            torch::Tensor embedding = embeddings[output_idx];
+            if (!embedding.defined() || embedding.numel() == 0) {
+              continue;
+            }
+            embedding = embedding.to(torch::kFloat32);
+            Slice<float> embedding_slice = {embedding.data_ptr<float>(),
+                                            embedding.size(0)};
+            raw_forward_input.embeddings.push_back(embedding_slice);
+          }
+        }
+      } else {
+        torch::Tensor embeddings = res.value();
+        for (int64_t output_idx = 0; output_idx < embeddings.size(0);
+             ++output_idx) {
+          torch::Tensor embedding = embeddings[output_idx].to(torch::kFloat32);
+          Slice<float> embedding_slice = {embedding.data_ptr<float>(),
+                                          embedding.size(0)};
+          raw_forward_input.embeddings.push_back(embedding_slice);
+        }
+      }
+    }
+  }
+
+  if (copy_out_cache_block_infos_ != nullptr &&
+      copy_out_cache_block_infos_->size() > 0) {
+    raw_forward_input.copy_out_blocks.insert(
+        raw_forward_input.copy_out_blocks.end(),
+        copy_out_cache_block_infos_->begin(),
+        copy_out_cache_block_infos_->end());
+  }
+  if (copy_in_cache_block_infos_ != nullptr &&
+      copy_in_cache_block_infos_->size() > 0) {
+    raw_forward_input.copy_in_blocks.insert(
+        raw_forward_input.copy_in_blocks.end(),
+        copy_in_cache_block_infos_->begin(),
+        copy_in_cache_block_infos_->end());
+  }
+  split_copy_out_blocks(raw_forward_input, write_block_ids_);
+  // Reuse the same swap-blocks processing logic as BatchInputBuilder.
+  if (swap_cache_block_infos_ != nullptr &&
+      swap_cache_block_infos_->size() > 0) {
+    auto& swap_blocks = *swap_cache_block_infos_;
+    if (FLAGS_enable_block_copy_kernel) {
+      std::sort(swap_blocks.begin(),
+                swap_blocks.end(),
+                [](const CacheBlockInfo& a, const CacheBlockInfo& b) {
+                  return a.device_block_id < b.device_block_id;
+                });
+      if (!swap_blocks.empty()) {
+        std::vector<int32_t> src_indices, dst_indices, cum_sum;
+        int32_t current_src = swap_blocks[0].device_block_id;
+        src_indices.reserve(swap_blocks.size());
+        dst_indices.reserve(swap_blocks.size());
+
+        src_indices.push_back(swap_blocks[0].device_block_id);
+        dst_indices.push_back(swap_blocks[0].host_block_id);
+        for (size_t i = 1; i < swap_blocks.size(); i++) {
+          dst_indices.push_back(swap_blocks[i].host_block_id);
+          if (swap_blocks[i].device_block_id != current_src) {
+            src_indices.push_back(swap_blocks[i].device_block_id);
+            cum_sum.push_back(i);
+            current_src = swap_blocks[i].device_block_id;
+          }
+        }
+        cum_sum.push_back(swap_blocks.size());
+
+        raw_forward_input.swap_blocks.clear();
+        raw_forward_input.src_block_indices = std::move(src_indices);
+        raw_forward_input.dst_block_indices = std::move(dst_indices);
+        raw_forward_input.cum_sum = std::move(cum_sum);
+      }
+    } else {
+      raw_forward_input.swap_blocks.insert(raw_forward_input.swap_blocks.end(),
+                                           swap_blocks.begin(),
+                                           swap_blocks.end());
+    }
+  }
 
   // Add multi-step specific data using existing RawForwardInput fields
   auto& multi_step_state = multi_step_state_;
@@ -307,7 +547,8 @@ RawForwardInput MultiStepBatchInputBuilder::state_to_raw_forward_input(
     int64_t batch_size = static_cast<int64_t>(sequences_.size());
     int64_t step_rounds = static_cast<int64_t>(multi_step_state.total_steps);
 
-    int64_t n_kv_heads = args_ ? args_->n_kv_heads().value_or(args_->n_heads()) : 0;
+    int64_t n_kv_heads =
+        args_ ? args_->n_kv_heads().value_or(args_->n_heads()) : 0;
     int64_t head_dim = args_ ? args_->head_dim() : 0;
 
     raw_forward_input.shared_kv_shape = {
