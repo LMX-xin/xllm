@@ -61,7 +61,7 @@ class LLMWorkerImpl : public WorkerImpl {
   std::optional<ForwardOutput> step_multi_round(ForwardInput input);
 
   // Update input for next round in multi-round decoding
-  void update_input_for_decode(ForwardInput& input,
+  void update_for_next_step(ForwardInput& input,
     int32_t round,
     const SampleOutput& sample_output,
     const torch::Tensor& out_token_ids,

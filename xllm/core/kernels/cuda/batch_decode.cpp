@@ -31,7 +31,7 @@ torch::Tensor generate_decode_plan_info(
     int64_t window_left,
     bool enable_cuda_graph) {
   LLM_NVTX_RANGE("generate_decode_plan_info");
-  LOG(INFO) << "in generate_decode_plan_info";
+  // LOG(INFO) << "in generate_decode_plan_info";
   std::string uri;
   {
     LLM_NVTX_RANGE_COLOR("generate_decode_plan_prepare", 0xFF808080);  // Gray
@@ -118,7 +118,7 @@ void batch_decode(torch::Tensor float_workspace_buffer,
                   bool enable_cuda_graph,
                   std::optional<torch::Tensor>& plan_info) {
   LLM_NVTX_RANGE("batch_decode");
-  
+  // LOG(INFO) << "output.scalar_type():" << output.scalar_type();
   std::string uri;
   {
     LLM_NVTX_RANGE_COLOR("batch_decode_prepare", 0xFF808080);  // Gray

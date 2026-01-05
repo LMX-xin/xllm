@@ -174,9 +174,22 @@ struct ModelInputParams {
     params.batch_id = batch_id;
 
     // Copy plan_info if present
-    if (plan_info.has_value()) {
-      params.plan_info = plan_info.value();
+    if (prefill_plan_info.has_value()) {
+      params.prefill_plan_info = prefill_plan_info.value();
     }
+    if (shared_plan_info.has_value()) {
+      params.shared_plan_info = shared_plan_info.value();
+    }
+    if (unshared_plan_info.has_value()) {
+      params.unshared_plan_info = unshared_plan_info.value();
+    }
+
+    params.shared_paged_kv_indices = safe_to(shared_paged_kv_indices, device);
+    params.unshared_paged_kv_indices = safe_to(unshared_paged_kv_indices, device);
+    params.shared_paged_kv_indptr = safe_to(shared_paged_kv_indptr, device);
+    params.unshared_paged_kv_indptr = safe_to(unshared_paged_kv_indptr, device);
+    params.shared_paged_kv_last_page_len = safe_to(shared_paged_kv_last_page_len, device);
+    params.unshared_paged_kv_last_page_len = safe_to(unshared_paged_kv_last_page_len, device);
 
     return params;
   }
@@ -320,9 +333,12 @@ struct ModelInputParams {
 
   // for multi-round decode with shared KV cache
   // computed once per step in step_multi_round, reused across all layers
-  torch::Tensor decode_paged_kv_indices;  // filtered indices after mask
-  torch::Tensor decode_paged_kv_indptr;  // cumulative indptr
-  torch::Tensor decode_paged_kv_last_page_len;  // last page len for each sequence
+  torch::Tensor shared_paged_kv_indices;  // filtered indices after mask
+  torch::Tensor unshared_paged_kv_indices;  // filtered indices after mask
+  torch::Tensor shared_paged_kv_indptr;  // cumulative indptr
+  torch::Tensor unshared_paged_kv_indptr;  // cumulative indptr
+  torch::Tensor shared_paged_kv_last_page_len;  // last page len for each sequence
+  torch::Tensor unshared_paged_kv_last_page_len;  // last page len for each sequence
 
   uint64_t batch_id;
 
@@ -351,7 +367,9 @@ struct ModelInputParams {
 
   // Cached plan_info for batch_prefill optimization (reused across layers)
   // Generated in llm_worker_impl.cpp for prefill mode
-  std::optional<torch::Tensor> plan_info;
+  std::optional<torch::Tensor> prefill_plan_info;
+  std::optional<torch::Tensor> shared_plan_info;
+  std::optional<torch::Tensor> unshared_plan_info;
 };
 
 }  // namespace xllm

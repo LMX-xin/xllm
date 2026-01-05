@@ -64,7 +64,9 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> AttentionImpl::forward(
     output = output.view({-1, num_heads_ * head_size_});
     return std::make_tuple(output, output_lse);
   }
-
+  // LOG(INFO) << "before kv view.";
+  // LOG(INFO) << "key.is_contiguous(): " << key.is_contiguous();
+  // LOG(INFO) << "value.is_contiguous(): " << value.is_contiguous();
   {
     LLM_NVTX_RANGE_COLOR("attention_reshape_inputs", 0xFF808080);  // Gray
     query = query.view({-1, num_heads_, head_size_});
@@ -126,7 +128,7 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> AttentionImpl::forward(
       attention_params.q_cu_seq_lens = attn_metadata.q_cu_seq_lens;
       // LOG(INFO) << "attn_metadata.is_prefill: " << attn_metadata.is_prefill;
       // TODO: support chunked prefill
-      attention_params.plan_info = attn_metadata.plan_info;
+      attention_params.plan_info = attn_metadata.prefill_plan_info;
       attention_params.key = key;
       attention_params.value = value;
       // LOG(INFO) << "key.shape: " << key.sizes();
@@ -137,7 +139,8 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> AttentionImpl::forward(
     LLM_NVTX_RANGE("attention_decode");
 
     if (FLAGS_max_decode_rounds > 0) {
-      LOG(INFO) << "attention_decode_with_shared";
+      auto float_options = torch::TensorOptions().dtype(torch::kFloat32).device(query.device());
+      // LOG(INFO) << "attention_decode_with_shared";
       LLM_NVTX_RANGE("attention_decode_with_shared");
 
       uint32_t batch_size = attn_metadata.kv_cu_seq_lens.size(0) - 1;
@@ -147,7 +150,10 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> AttentionImpl::forward(
       // [max_shared_kv_len, num_kv_heads_, head_size_]
       torch::Tensor shared_k_cache = attn_metadata.shared_k_cache;
       torch::Tensor shared_v_cache = attn_metadata.shared_v_cache;
-
+      shared_k_cache = shared_k_cache.unsqueeze(1);
+      shared_v_cache = shared_v_cache.unsqueeze(1);
+      // LOG(INFO) << "shared_k_cache.shape: " << shared_k_cache.sizes();
+      // LOG(INFO) << "shared_v_cache.shape: " << shared_v_cache.sizes();
       // [batch_size * beam_size * max_decode_step, num_kv_heads_, head_size_]
       key = key.view({batch_size, beam_size, num_kv_heads_, head_size_})
                 .contiguous();
@@ -168,25 +174,86 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> AttentionImpl::forward(
                                                     attn_metadata.block_table,
                                                     attn_metadata.step);
       torch::Tensor unshared_k_cache =
-          k_cache.view({-1, num_kv_heads_, head_size_});
+          k_cache.view({-1, 1, num_kv_heads_, head_size_});
       torch::Tensor unshared_v_cache =
-          v_cache.view({-1, num_kv_heads_, head_size_});
-      auto full_k_cache = torch::cat({shared_k_cache, unshared_k_cache}, 0);
-      full_k_cache = full_k_cache.unsqueeze(1);
+          v_cache.view({-1, 1, num_kv_heads_, head_size_});
+      // LOG(INFO) << "unshared_k_cache.shape: " << unshared_k_cache.sizes();
+      // LOG(INFO) << "unshared_v_cache.shape: " << unshared_v_cache.sizes();
+      // auto full_k_cache = torch::cat({shared_k_cache, unshared_k_cache}, 0);
+      // full_k_cache = full_k_cache.unsqueeze(1);
       // LOG(INFO) << "full_k_cache.shape: " << full_k_cache.sizes();
       // LOG(INFO) << "full_k_cache.shape: " << full_k_cache.sizes();
-      auto full_v_cache = torch::cat({shared_v_cache, unshared_v_cache}, 0);
-      full_v_cache = full_v_cache.unsqueeze(1);
+      // auto full_v_cache = torch::cat({shared_v_cache, unshared_v_cache}, 0);
+      // full_v_cache = full_v_cache.unsqueeze(1);
       // LOG(INFO) << "full_v_cache.shape: " << full_v_cache.sizes();
       // LOG(INFO) << "full_v_cache.shape: " << full_v_cache.sizes();
+      
+      torch::Tensor shared_o = torch::zeros_like(query);
+      torch::Tensor unshared_o = torch::zeros_like(query);
+
+      LOG(INFO) << "shared_o.shape: " << shared_o.sizes();
+      LOG(INFO) << "unshared_o.shape: " << unshared_o.sizes();
+      // LOG(INFO) << "shared_o.shape: " << shared_o.sizes();
+      // LOG(INFO) << "unshared_o.shape: " << unshared_o.sizes();
+      torch::Tensor shared_lse = torch::zeros({query.size(0), query.size(1), 1}, float_options);
+      torch::Tensor unshared_lse = torch::zeros({query.size(0), query.size(1), 1}, float_options);
+      // LOG(INFO) << "shared_lse.shape: " << shared_lse.sizes();
+      // LOG(INFO) << "unshared_lse.shape: " << unshared_lse.sizes();
+      {
+        LLM_NVTX_RANGE_COLOR("batch_decode_shared", 0xFFFF0000);  // Red
+        xllm::kernel::AttentionParams shared_attention_params;
+
+        shared_attention_params.return_lse = true;
+        shared_attention_params.output_lse = shared_lse;
+
+        shared_attention_params.window_size_left = sliding_window_;
+        shared_attention_params.scale = scale_;
+        shared_attention_params.compute_dtype = attn_metadata.compute_dtype;
+        // for flashinfer
+        shared_attention_params.float_workspace_buffer =
+            FlashinferWorkspace::get_instance().get_float_workspace_buffer();
+        shared_attention_params.int_workspace_buffer =
+            FlashinferWorkspace::get_instance().get_int_workspace_buffer();
+        shared_attention_params.page_locked_int_workspace_buffer =
+            FlashinferWorkspace::get_instance()
+                .get_page_locked_int_workspace_buffer();
+
+        // TODO: support chunked prefill
+        CHECK(!attn_metadata.is_chunked_prefill)
+            << "chunked prefill is not supported";
+        // LOG(INFO) << "query.shape: " << query.sizes();
+        // LOG(INFO) << "shared_o.shape: " << shared_o.sizes();
+        shared_attention_params.query = query;
+        shared_attention_params.output = shared_o;
+        // LOG(INFO) << "shared_k_cache.shape: " << shared_k_cache.sizes();
+        // LOG(INFO) << "shared_v_cache.shape: " << shared_v_cache.sizes();
+        shared_attention_params.k_cache = shared_k_cache;
+        shared_attention_params.v_cache = shared_v_cache;
+        // LOG(INFO) << "attn_metadata.shared_paged_kv_indices: " << attn_metadata.shared_paged_kv_indices;
+        // LOG(INFO) << "attn_metadata.shared_paged_kv_indptr: " << attn_metadata.shared_paged_kv_indptr;
+        // LOG(INFO) << "attn_metadata.shared_paged_kv_last_page_len: " << attn_metadata.shared_paged_kv_last_page_len;
+        shared_attention_params.paged_kv_indices =
+            attn_metadata.shared_paged_kv_indices;
+        shared_attention_params.paged_kv_indptr =
+            attn_metadata.shared_paged_kv_indptr;
+        shared_attention_params.paged_kv_last_page_len =
+            attn_metadata.shared_paged_kv_last_page_len;
+
+        // shared_attention_params.plan_info = attn_metadata.plan_info;
+
+        xllm::kernel::batch_decode(shared_attention_params);
+        // LOG(INFO) << "output: " << o;
+        // LOG(FATAL) << "after batch_decode.";
+      }
+
+      // LOG(INFO) << "after shared batch_decode.";
 
       {
         LLM_NVTX_RANGE_COLOR("batch_decode_unshared", 0xFFFF0000);  // Red
         xllm::kernel::AttentionParams unshared_attention_params;
-        auto unshared_lse = std::nullopt;
 
-        unshared_attention_params.return_lse = false;
         unshared_attention_params.output_lse = unshared_lse;
+        unshared_attention_params.return_lse = true;
 
         unshared_attention_params.window_size_left = sliding_window_;
         unshared_attention_params.scale = scale_;
@@ -205,27 +272,38 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> AttentionImpl::forward(
             << "chunked prefill is not supported";
 
         unshared_attention_params.query = query;
-        unshared_attention_params.output = output;
-
-        unshared_attention_params.k_cache = full_k_cache;
-        unshared_attention_params.v_cache = full_v_cache;
-
+        unshared_attention_params.output = unshared_o;
+        // LOG(INFO) << "unshared_k_cache.shape: " << unshared_k_cache.sizes();
+        // LOG(INFO) << "unshared_v_cache.shape: " << unshared_v_cache.sizes();
+        unshared_attention_params.k_cache = unshared_k_cache;
+        unshared_attention_params.v_cache = unshared_v_cache;
+        // LOG(INFO) << "attn_metadata.unshared_paged_kv_indices: " << attn_metadata.unshared_paged_kv_indices;
+        // LOG(INFO) << "attn_metadata.unshared_paged_kv_indptr: " << attn_metadata.unshared_paged_kv_indptr;
+        // LOG(INFO) << "attn_metadata.unshared_paged_kv_last_page_len: " << attn_metadata.unshared_paged_kv_last_page_len;
         unshared_attention_params.paged_kv_indices =
-            attn_metadata.decode_paged_kv_indices;
+            attn_metadata.unshared_paged_kv_indices;
         unshared_attention_params.paged_kv_indptr =
-            attn_metadata.decode_paged_kv_indptr;
+            attn_metadata.unshared_paged_kv_indptr;
         unshared_attention_params.paged_kv_last_page_len =
-            attn_metadata.decode_paged_kv_last_page_len;
+            attn_metadata.unshared_paged_kv_last_page_len;
 
-        unshared_attention_params.plan_info = attn_metadata.plan_info;
+        // unshared_attention_params.plan_info = attn_metadata.plan_info;
 
         xllm::kernel::batch_decode(unshared_attention_params);
         // LOG(INFO) << "output: " << o;
         // LOG(FATAL) << "after batch_decode.";
       }
-
+      xllm::kernel::cuda::lse_combine(output, shared_o, shared_lse, unshared_o, unshared_lse);
       // LOG(INFO) << "output: " << output;
-      // LOG(FATAL) << "after batch_decode.";
+      // LOG(INFO) << "output_lse.shape: " << output_lse.sizes();
+      // LOG(INFO) << "shared_o.shape: " << shared_o.sizes();
+      // LOG(INFO) << "shared_lse.shape: " << shared_lse.sizes();
+      // LOG(INFO) << "unshared_o.shape: " << unshared_o.sizes();
+      // LOG(INFO) << "unshared_lse.shape: " << unshared_lse.sizes();
+      // LOG(FATAL) << "after lse_combine.";
+
+      LOG(INFO) << "output: " << output;
+      LOG(FATAL) << "after batch_decode.";
     } else {
       LLM_NVTX_RANGE("attention_decode_standard");
 

@@ -50,17 +50,26 @@ AttentionMetadata AttentionMetadata::build(const ModelInputParams& params,
   attn_metadata.is_dummy = (params.q_max_seq_len == 0);
 
   // Copy plan_info from params if present
-  attn_metadata.plan_info = params.plan_info;
+  attn_metadata.prefill_plan_info = params.prefill_plan_info;
+  attn_metadata.shared_plan_info = params.shared_plan_info;
+  attn_metadata.unshared_plan_info = params.unshared_plan_info;
 
   // for xattention
   if (params.current_round >= 0) {
     attn_metadata.step = params.current_round;
-    CHECK(params.decode_paged_kv_indices.defined()) << "decode_paged_kv_indices is not defined";
-    CHECK(params.decode_paged_kv_indptr.defined()) << "decode_paged_kv_indptr is not defined";
-    CHECK(params.decode_paged_kv_last_page_len.defined()) << "decode_paged_kv_last_page_len is not defined";
-    attn_metadata.decode_paged_kv_indices = params.decode_paged_kv_indices;
-    attn_metadata.decode_paged_kv_indptr = params.decode_paged_kv_indptr;
-    attn_metadata.decode_paged_kv_last_page_len = params.decode_paged_kv_last_page_len;
+    CHECK(params.shared_paged_kv_indices.defined()) << "shared_paged_kv_indices is not defined";
+    CHECK(params.unshared_paged_kv_indices.defined()) << "unshared_paged_kv_indices is not defined";
+    CHECK(params.shared_paged_kv_indptr.defined()) << "shared_paged_kv_indptr is not defined";
+    CHECK(params.unshared_paged_kv_indptr.defined()) << "unshared_paged_kv_indptr is not defined";
+    CHECK(params.shared_paged_kv_last_page_len.defined()) << "shared_paged_kv_last_page_len is not defined";
+    CHECK(params.unshared_paged_kv_last_page_len.defined()) << "unshared_paged_kv_last_page_len is not defined";
+
+    attn_metadata.shared_paged_kv_indices = params.shared_paged_kv_indices;
+    attn_metadata.unshared_paged_kv_indices = params.unshared_paged_kv_indices;
+    attn_metadata.shared_paged_kv_indptr = params.shared_paged_kv_indptr;
+    attn_metadata.unshared_paged_kv_indptr = params.unshared_paged_kv_indptr;
+    attn_metadata.shared_paged_kv_last_page_len = params.shared_paged_kv_last_page_len;
+    attn_metadata.unshared_paged_kv_last_page_len = params.unshared_paged_kv_last_page_len;
   }
 
   return attn_metadata;

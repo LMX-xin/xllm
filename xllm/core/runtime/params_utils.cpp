@@ -44,7 +44,7 @@ void proto_to_forward_input(const proto::ForwardInput* pb_forward_input,
                             int64_t num_decoding_tokens) {
   Timer timer;
   int32_t num_sequences = pb_forward_input->num_sequences();
-  LOG(INFO) << "num_sequences: " << num_sequences;
+  // LOG(INFO) << "num_sequences: " << num_sequences;
   std::vector<int32_t> flatten_tokens_vec =
       std::vector<int32_t>(pb_forward_input->flatten_tokens_vec().begin(),
                            pb_forward_input->flatten_tokens_vec().end());
@@ -85,7 +85,7 @@ void proto_to_forward_input(const proto::ForwardInput* pb_forward_input,
       std::vector<int32_t>(pb_forward_input->paged_kv_last_page_len().begin(),
                            pb_forward_input->paged_kv_last_page_len().end());
   std::vector<std::vector<int32_t>> block_tables_vec;
-  LOG(INFO) << "pb_forward_input->block_tables_vec().size(): " << pb_forward_input->block_tables_vec().size();
+  // LOG(INFO) << "pb_forward_input->block_tables_vec().size(): " << pb_forward_input->block_tables_vec().size();
   for (size_t i = 0; i < pb_forward_input->block_tables_vec().size(); ++i) {
     block_tables_vec.emplace_back(std::vector<int32_t>(
         pb_forward_input->block_tables_vec()[i].block_tables().begin(),
@@ -93,9 +93,9 @@ void proto_to_forward_input(const proto::ForwardInput* pb_forward_input,
     // aprint<int32_t>((block_tables_vec.back()), "block_tables_vec",
     // global_rank_);
   }
-  for (size_t i = 0; i < block_tables_vec.size(); ++i) {
-    LOG(INFO) << "block_tables_vec[" << i << "].size(): " << block_tables_vec[i].size();
-  }
+  // for (size_t i = 0; i < block_tables_vec.size(); ++i) {
+  //   LOG(INFO) << "block_tables_vec[" << i << "].size(): " << block_tables_vec[i].size();
+  // }
   // LOG(INFO) << "block_tables_vec.size(): " << block_tables_vec.size();
   std::vector<int32_t> selected_token_idxes =
       std::vector<int32_t>(pb_forward_input->selected_token_idxes().begin(),
@@ -300,7 +300,7 @@ void proto_to_forward_input(const proto::ForwardInput* pb_forward_input,
   input_params.batch_forward_type =
       BatchForwardType(pb_forward_input->batch_forward_type());
   input_params.num_sequences = block_tables_vec.size();
-  LOG(INFO) << "input_params.num_sequences: " << input_params.num_sequences;
+  // LOG(INFO) << "input_params.num_sequences: " << input_params.num_sequences;
   assert(input_params.num_sequences == pb_forward_input->num_sequences());
   input_params.kv_max_seq_len = pb_forward_input->max_seq_len();
   input_params.q_max_seq_len = pb_forward_input->q_max_seq_len();
@@ -331,13 +331,13 @@ void proto_to_forward_input(const proto::ForwardInput* pb_forward_input,
 
   input_params.new_cache_slots =
       torch::tensor(new_token_slot_ids, tensor_options);
-  for (size_t i = 0; i < block_tables_vec.size(); ++i) {
-    LOG(INFO) << "block_tables_vec[" << i << "].size(): " << block_tables_vec[i].size();
-  }
+  // for (size_t i = 0; i < block_tables_vec.size(); ++i) {
+  //   LOG(INFO) << "block_tables_vec[" << i << "].size(): " << block_tables_vec[i].size();
+  // }
   util::pad_2d_vector(block_tables_vec, /*pad_value=*/0);
   input_params.block_tables =
       std::move(create_2d_tensor(block_tables_vec, torch::kInt));
-  LOG(INFO) << "input_params.block_tables: " << input_params.block_tables;
+  // LOG(INFO) << "input_params.block_tables: " << input_params.block_tables;
   input_params.dp_global_token_nums = std::move(dp_global_token_nums);
   input_params.embedding_ids = std::move(embedding_ids);
   input_params.extra_token_ids = std::move(extra_token_ids);
