@@ -66,6 +66,8 @@ if(USE_NPU)
   set(COMMON_LIBS Python::Python ascendcl atb_customize hccl c_sec nnopbase ms_tools_ext torch_npu torch_python)
 elseif(USE_MLU)
   set(COMMON_LIBS Python::Python)
+elseif(USE_CUDA)
+  set(COMMON_LIBS Python::Python ${TORCH_LIBRARIES})
 endif()
 
 if(USE_MSPTI)

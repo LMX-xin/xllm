@@ -15,6 +15,7 @@ limitations under the License.
 #include <c10/cuda/CUDAGuard.h>
 #include <cuda_runtime.h>
 #include <torch/cuda.h>
+
 #include <cmath>
 
 #include "cuda_ops_api.h"
@@ -36,16 +37,16 @@ namespace {
 //   unshared_o  : [B, H, D] - unshared attention output
 //   unshared_lse: [B, H, 1] - unshared log-sum-exp (FP32)
 //   output      : [B, H, D] - combined output
-template <typename scalar_t>
+template <typename scalar_t, typename out_scalar_t>
 __global__ void lse_combine_kernel(
-    scalar_t* __restrict__ output,           // [B, H, D]
-    const scalar_t* __restrict__ shared_o,   // [B, H, D]
-    const float* __restrict__ shared_lse,    // [B, H, 1], always FP32
-    const scalar_t* __restrict__ unshared_o, // [B, H, D]
-    const float* __restrict__ unshared_lse,  // [B, H, 1], always FP32
-    const int64_t B,    // batch_size * beam_size
-    const int64_t H,    // num_heads
-    const int64_t D) {  // head_dim
+    out_scalar_t* __restrict__ output,        // [B, H, D]
+    const scalar_t* __restrict__ shared_o,    // [B, H, D]
+    const float* __restrict__ shared_lse,     // [B, H, 1], always FP32
+    const scalar_t* __restrict__ unshared_o,  // [B, H, D]
+    const float* __restrict__ unshared_lse,   // [B, H, 1], always FP32
+    const int64_t B,                          // batch_size * beam_size
+    const int64_t H,                          // num_heads
+    const int64_t D) {                        // head_dim
   const int64_t total_elements = B * H;
   const int64_t idx = static_cast<int64_t>(blockIdx.y);
 
@@ -79,11 +80,11 @@ __global__ void lse_combine_kernel(
     const float shared_val = static_cast<float>(shared_o[base_idx + d]);
     const float unshared_val = static_cast<float>(unshared_o[base_idx + d]);
     const float combined = w_shared * shared_val + w_unshared * unshared_val;
-    output[base_idx + d] = static_cast<scalar_t>(combined);
+    output[base_idx + d] = static_cast<out_scalar_t>(combined);
   }
 }
 
-} // namespace
+}  // namespace
 
 namespace xllm::kernel::cuda {
 
@@ -104,47 +105,58 @@ void lse_combine(torch::Tensor output,
   TORCH_CHECK(unshared_o.dim() == 3, "unshared_o must be 3D [B, H, D]");
   TORCH_CHECK(shared_lse.dim() == 3, "shared_lse must be 3D [B, H, 1]");
   TORCH_CHECK(unshared_lse.dim() == 3, "unshared_lse must be 3D [B, H, 1]");
-  
+
   const int64_t B = shared_o.size(0);
   const int64_t H = shared_o.size(1);
   const int64_t D = shared_o.size(2);
-  
-  TORCH_CHECK(shared_o.sizes() == unshared_o.sizes(), 
+
+  TORCH_CHECK(shared_o.sizes() == unshared_o.sizes(),
               "shared_o and unshared_o must have same shape");
   TORCH_CHECK(shared_lse.scalar_type() == torch::kFloat32,
               "shared_lse must be float32");
   TORCH_CHECK(unshared_lse.scalar_type() == torch::kFloat32,
               "unshared_lse must be float32");
-  TORCH_CHECK(shared_lse.size(0) == B && shared_lse.size(1) == H && shared_lse.size(2) == 1,
+  TORCH_CHECK(shared_lse.size(0) == B && shared_lse.size(1) == H &&
+                  shared_lse.size(2) == 1,
               "shared_lse shape mismatch, expected [B, H, 1]");
-  TORCH_CHECK(unshared_lse.size(0) == B && unshared_lse.size(1) == H && unshared_lse.size(2) == 1,
+  TORCH_CHECK(unshared_lse.size(0) == B && unshared_lse.size(1) == H &&
+                  unshared_lse.size(2) == 1,
               "unshared_lse shape mismatch, expected [B, H, 1]");
-  
+
   // Ensure output has the correct shape and dtype.
   if (!output.defined() || output.sizes() != shared_o.sizes()) {
     output = torch::empty_like(shared_o);
   }
-  
+
   const at::cuda::OptionalCUDAGuard device_guard(device_of(shared_o));
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  
+
   // Launch kernel: one block per (batch, head) pair, threads along D.
   const int64_t total_elements = B * H;
   const int threads_per_block = 128;
   dim3 block_dim(threads_per_block, 1, 1);
   dim3 grid_dim(1, static_cast<unsigned int>(total_elements), 1);
-  
-  DISPATCH_FLOATING_TYPES(shared_o.scalar_type(), "lse_combine_kernel", [&] {
-    lse_combine_kernel<scalar_t><<<grid_dim, block_dim, 0, stream>>>(
-        output.data_ptr<scalar_t>(),
-        shared_o.data_ptr<scalar_t>(),
-        shared_lse.data_ptr<float>(),
-        unshared_o.data_ptr<scalar_t>(),
-        unshared_lse.data_ptr<float>(),
-        B, H, D);
-  });
-  
+
+  DISPATCH_FLOATING_TYPES(
+      shared_o.scalar_type(), "lse_combine_kernel_input", [&] {
+        using in_t = scalar_t;
+        DISPATCH_FLOATING_TYPES(
+            output.scalar_type(), "lse_combine_kernel_output", [&] {
+              using out_t = scalar_t;
+              lse_combine_kernel<in_t, out_t>
+                  <<<grid_dim, block_dim, 0, stream>>>(
+                      output.data_ptr<out_t>(),
+                      shared_o.data_ptr<in_t>(),
+                      shared_lse.data_ptr<float>(),
+                      unshared_o.data_ptr<in_t>(),
+                      unshared_lse.data_ptr<float>(),
+                      B,
+                      H,
+                      D);
+            });
+      });
+
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
-} // namespace xllm::kernel::cuda
+}  // namespace xllm::kernel::cuda

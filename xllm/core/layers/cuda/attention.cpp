@@ -32,6 +32,27 @@ void lse_combine(torch::Tensor shared_o,
   xllm::kernel::cuda::lse_combine(
       output, shared_o, shared_lse, unshared_o, unshared_lse);
 }
+// std::pair<torch::Tensor, torch::Tensor> online_merge(
+//   const torch::Tensor& o_shared,
+//   const torch::Tensor& lse_shared,
+//   const torch::Tensor& o_unshared,
+//   const torch::Tensor& lse_unshared) {
+// auto lse_s = lse_shared.to(torch::kFloat);
+// auto lse_u = lse_unshared.to(torch::kFloat);
+// auto o_s = o_shared.to(torch::kFloat);
+// auto o_u = o_unshared.to(torch::kFloat);
+
+// auto li_max = torch::maximum(lse_s, lse_u);
+// auto exp_li = torch::exp2(lse_s - li_max);
+// auto exp_lij = torch::exp2(lse_u - li_max);
+// auto li_new = li_max + torch::log2(exp_li + exp_lij);
+
+// auto w_shared = torch::exp2(lse_s - li_new).unsqueeze(-1);
+// auto w_unshared = torch::exp2(lse_u - li_new).unsqueeze(-1);
+// auto o_online =
+//     (w_shared * o_s + w_unshared * o_u).to(o_shared.dtype());
+// return {o_online, li_new};
+// }
 }  // namespace
 
 namespace xllm {
@@ -99,9 +120,9 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> AttentionImpl::forward(
     if (FLAGS_max_decode_rounds > 0) {
       {
         LLM_NVTX_RANGE_COLOR("prefill_reshape_and_cache", 0xFF008080);  // Teal
-        rec_kernel_->prefill_reshape_and_cache(key, 
-                                               value, 
-                                               attn_metadata.shared_k_cache, 
+        rec_kernel_->prefill_reshape_and_cache(key,
+                                               value,
+                                               attn_metadata.shared_k_cache,
                                                attn_metadata.shared_v_cache);
       }
     }
@@ -139,7 +160,8 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> AttentionImpl::forward(
     LLM_NVTX_RANGE("attention_decode");
 
     if (FLAGS_max_decode_rounds > 0) {
-      auto float_options = torch::TensorOptions().dtype(torch::kFloat32).device(query.device());
+      auto float_options =
+          torch::TensorOptions().dtype(torch::kFloat32).device(query.device());
       // LOG(INFO) << "attention_decode_with_shared";
       LLM_NVTX_RANGE("attention_decode_with_shared");
 
@@ -187,16 +209,20 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> AttentionImpl::forward(
       // full_v_cache = full_v_cache.unsqueeze(1);
       // LOG(INFO) << "full_v_cache.shape: " << full_v_cache.sizes();
       // LOG(INFO) << "full_v_cache.shape: " << full_v_cache.sizes();
-      
-      torch::Tensor shared_o = torch::zeros_like(query);
-      torch::Tensor unshared_o = torch::zeros_like(query);
 
+      torch::Tensor shared_o = torch::zeros_like(query).to(float_options);
+      torch::Tensor unshared_o = torch::zeros_like(query).to(float_options);
+      // torch::Tensor lmx_output = torch::zeros_like(query).to(float_options);
+      // torch::Tensor lmx_output_unshared =
+      // torch::zeros_like(query).to(float_options);
       LOG(INFO) << "shared_o.shape: " << shared_o.sizes();
       LOG(INFO) << "unshared_o.shape: " << unshared_o.sizes();
       // LOG(INFO) << "shared_o.shape: " << shared_o.sizes();
       // LOG(INFO) << "unshared_o.shape: " << unshared_o.sizes();
-      torch::Tensor shared_lse = torch::zeros({query.size(0), query.size(1), 1}, float_options);
-      torch::Tensor unshared_lse = torch::zeros({query.size(0), query.size(1), 1}, float_options);
+      torch::Tensor shared_lse =
+          torch::zeros({query.size(0), query.size(1), 1}, float_options);
+      torch::Tensor unshared_lse =
+          torch::zeros({query.size(0), query.size(1), 1}, float_options);
       // LOG(INFO) << "shared_lse.shape: " << shared_lse.sizes();
       // LOG(INFO) << "unshared_lse.shape: " << unshared_lse.sizes();
       {
@@ -229,9 +255,12 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> AttentionImpl::forward(
         // LOG(INFO) << "shared_v_cache.shape: " << shared_v_cache.sizes();
         shared_attention_params.k_cache = shared_k_cache;
         shared_attention_params.v_cache = shared_v_cache;
-        // LOG(INFO) << "attn_metadata.shared_paged_kv_indices: " << attn_metadata.shared_paged_kv_indices;
-        // LOG(INFO) << "attn_metadata.shared_paged_kv_indptr: " << attn_metadata.shared_paged_kv_indptr;
-        // LOG(INFO) << "attn_metadata.shared_paged_kv_last_page_len: " << attn_metadata.shared_paged_kv_last_page_len;
+        // LOG(INFO) << "attn_metadata.shared_paged_kv_indices: " <<
+        // attn_metadata.shared_paged_kv_indices; LOG(INFO) <<
+        // "attn_metadata.shared_paged_kv_indptr: " <<
+        // attn_metadata.shared_paged_kv_indptr; LOG(INFO) <<
+        // "attn_metadata.shared_paged_kv_last_page_len: " <<
+        // attn_metadata.shared_paged_kv_last_page_len;
         shared_attention_params.paged_kv_indices =
             attn_metadata.shared_paged_kv_indices;
         shared_attention_params.paged_kv_indptr =
@@ -277,9 +306,12 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> AttentionImpl::forward(
         // LOG(INFO) << "unshared_v_cache.shape: " << unshared_v_cache.sizes();
         unshared_attention_params.k_cache = unshared_k_cache;
         unshared_attention_params.v_cache = unshared_v_cache;
-        // LOG(INFO) << "attn_metadata.unshared_paged_kv_indices: " << attn_metadata.unshared_paged_kv_indices;
-        // LOG(INFO) << "attn_metadata.unshared_paged_kv_indptr: " << attn_metadata.unshared_paged_kv_indptr;
-        // LOG(INFO) << "attn_metadata.unshared_paged_kv_last_page_len: " << attn_metadata.unshared_paged_kv_last_page_len;
+        // LOG(INFO) << "attn_metadata.unshared_paged_kv_indices: " <<
+        // attn_metadata.unshared_paged_kv_indices; LOG(INFO) <<
+        // "attn_metadata.unshared_paged_kv_indptr: " <<
+        // attn_metadata.unshared_paged_kv_indptr; LOG(INFO) <<
+        // "attn_metadata.unshared_paged_kv_last_page_len: " <<
+        // attn_metadata.unshared_paged_kv_last_page_len;
         unshared_attention_params.paged_kv_indices =
             attn_metadata.unshared_paged_kv_indices;
         unshared_attention_params.paged_kv_indptr =
@@ -293,7 +325,12 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> AttentionImpl::forward(
         // LOG(INFO) << "output: " << o;
         // LOG(FATAL) << "after batch_decode.";
       }
-      xllm::kernel::cuda::lse_combine(output, shared_o, shared_lse, unshared_o, unshared_lse);
+      xllm::kernel::cuda::lse_combine(
+          output, shared_o, shared_lse, unshared_o, unshared_lse);
+      // auto [o_online, li_new] = online_merge(shared_o, shared_lse,
+      // unshared_o, unshared_lse); auto gap = o_online - output; LOG(INFO) <<
+      // "gap: " << gap;
+      LOG(INFO) << "li_new: " << li_new;
       // LOG(INFO) << "output: " << output;
       // LOG(INFO) << "output_lse.shape: " << output_lse.sizes();
       // LOG(INFO) << "shared_o.shape: " << shared_o.sizes();
@@ -302,8 +339,8 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> AttentionImpl::forward(
       // LOG(INFO) << "unshared_lse.shape: " << unshared_lse.sizes();
       // LOG(FATAL) << "after lse_combine.";
 
-      LOG(INFO) << "output: " << output;
-      LOG(FATAL) << "after batch_decode.";
+      // LOG(INFO) << "output: " << output;
+      // LOG(FATAL) << "after batch_decode.";
     } else {
       LLM_NVTX_RANGE("attention_decode_standard");
 

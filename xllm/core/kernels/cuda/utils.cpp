@@ -25,6 +25,7 @@ limitations under the License.
 namespace {
 const std::unordered_map<torch::ScalarType, std::string_view>
     filename_safe_dtype_map = {
+        {torch::kFloat, "f32"},
         {torch::kFloat16, "f16"},
         {torch::kBFloat16, "bf16"},
         {torch::kFloat8_e4m3fn, "e4m3"},
