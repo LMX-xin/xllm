@@ -104,6 +104,15 @@ void decoder_reshape_and_cache(torch::Tensor proj_k,
                                 torch::Tensor block_table,
                                 uint32_t step);
 
+void cache_select(const torch::Tensor& beam_index,
+                  std::vector<torch::Tensor>& unshared_k_cache,
+                  std::vector<torch::Tensor>& unshared_v_cache,
+                  const torch::Tensor& block_table,
+                  const torch::Tensor& group_offset,
+                  int64_t decode_step,
+                  int64_t beam_size,
+                  int64_t layer_num);
+
 // Generate plan_info for batch_prefill optimization
 // This should be called once before the layer loop for prefill mode
 torch::Tensor generate_prefill_plan_info(

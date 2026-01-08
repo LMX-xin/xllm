@@ -389,6 +389,11 @@ void RecTorchKernel::beam_search(torch::Tensor acc_logprob,
     auto new_probs = std::get<0>(topk_result);    // [batch_size, beam_size]
     auto new_indices = std::get<1>(topk_result);  // [batch_size, beam_size]
 
+    auto ordered_indices = new_indices.argsort(static_cast<int64_t>(1), false);
+    // Reorder new_probs (and corresponding new_indices) by ordered_indices to
+    // keep alignment.
+    new_probs = new_probs.gather(1, ordered_indices);
+    new_indices = new_indices.gather(1, ordered_indices);
     auto parent_beam = (new_indices / top_k).to(torch::kLong);      // [batch_size, beam_size]
     auto token_in_beam = (new_indices % top_k).to(torch::kLong);    // [batch_size, beam_size]
 
