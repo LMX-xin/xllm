@@ -15,10 +15,10 @@ limitations under the License.
 
 #pragma once
 
-#include "core/layers/qwen3_decoder_layer.h"
-#include "core/common/nvtx_helper.h"
-#include "llm_model_base.h"
 #include "core/common/global_flags.h"
+#include "core/common/nvtx_helper.h"
+#include "core/layers/qwen3_decoder_layer.h"
+#include "llm_model_base.h"
 
 namespace xllm {
 
@@ -149,7 +149,7 @@ class QWen3ModelImpl : public LlmModelImplBase<QWen3DecoderLayer> {
             attn_metadata.full_v_cache = target_layer_full_v_cache;
           }
         }
-        
+
         {
           LLM_NVTX_RANGE_COLOR("qwen3_layer_forward", 0xFF00FF00);  // Green
           auto& layer = layers_[i];

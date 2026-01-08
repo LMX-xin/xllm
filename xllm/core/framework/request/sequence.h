@@ -22,6 +22,7 @@ limitations under the License.
 #include <cstdint>
 #include <vector>
 
+#include "common/global_flags.h"
 #include "core/common/types.h"
 #include "core/framework/sampling/sampling_params.h"
 #include "core/framework/tokenizer/tokenizer.h"
@@ -35,7 +36,6 @@ limitations under the License.
 #include "sequence_logprob_state.h"
 #include "stopping_checker.h"
 #include "util/timer.h"
-#include "common/global_flags.h"
 namespace xllm {
 
 enum class SequenceStage : int8_t {

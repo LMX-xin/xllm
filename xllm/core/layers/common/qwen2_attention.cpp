@@ -17,8 +17,9 @@ limitations under the License.
 
 #include <glog/logging.h>
 
-#include "common/nvtx_helper.h"
 #include <tuple>
+
+#include "common/nvtx_helper.h"
 
 namespace {
 inline bool is_qwen3_model(const std::string& model_type) {
@@ -117,7 +118,7 @@ torch::Tensor Qwen2AttentionImpl::forward(
     const AttentionMetadata& attn_metadata,
     KVCache& kv_cache) {
   LLM_NVTX_RANGE("Qwen2Attention_forward");
-  
+
   // 1. qkv projection
   torch::Tensor qkv;
   {

@@ -19,8 +19,8 @@ limitations under the License.
 #include <string>
 
 #ifdef USE_CUDA
-#include <nvToolsExt.h>
 #include <cuda_runtime.h>
+#include <nvToolsExt.h>
 #endif
 
 namespace xllm {
@@ -71,4 +71,3 @@ class NvtxRange {
 #endif
 
 }  // namespace xllm
-

@@ -22,7 +22,6 @@ limitations under the License.
 #include "framework/kv_cache/kv_cache.h"
 #include "framework/model/model_input_params.h"
 #include "layers/common/attention_metadata.h"
-
 #include "xllm/core/kernels/cuda/triton/rec/rec.h"
 #include "xllm/core/kernels/cuda/triton/rec/rec_torch.h"
 
@@ -55,7 +54,6 @@ class AttentionImpl : public torch::nn::Module {
   int sliding_window_;
 
   std::unique_ptr<kernel::cuda::triton::RecKernel> rec_kernel_;
-
 };
 TORCH_MODULE(Attention);
 

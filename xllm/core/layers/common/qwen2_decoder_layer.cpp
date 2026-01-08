@@ -72,7 +72,7 @@ torch::Tensor Qwen2DecoderLayerImpl::forward(
     KVCache& kv_cache,
     const ModelInputParams& input_params) {
   LLM_NVTX_RANGE("Qwen2DecoderLayer_forward");
-  
+
   // Pre-attention norm
   {
     LLM_NVTX_RANGE_COLOR("input_norm", 0xFFFF00FF);  // Magenta

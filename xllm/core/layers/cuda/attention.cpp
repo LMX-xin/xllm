@@ -97,10 +97,8 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> AttentionImpl::forward(
     if (FLAGS_max_decode_rounds > 0) {
       {
         LLM_NVTX_RANGE_COLOR("prefill_reshape_and_cache", 0xFF008080);  // Teal
-        rec_kernel_->prefill_reshape_and_cache(key, 
-                                               value, 
-                                               attn_metadata.full_k_cache, 
-                                               attn_metadata.full_v_cache);
+        rec_kernel_->prefill_reshape_and_cache(
+            key, value, attn_metadata.full_k_cache, attn_metadata.full_v_cache);
       }
     }
 
@@ -158,24 +156,27 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> AttentionImpl::forward(
       int32_t max_decode_step = k_cache.size(2);
       // LOG(INFO) << "full_kv_len: " << full_kv_len;
       // LOG(INFO) << "unshared_offset: " << unshared_offset;
-      auto unshared_k_cache = full_k_cache.slice(0, unshared_offset, full_kv_len);
-      auto unshared_v_cache = full_v_cache.slice(0, unshared_offset, full_kv_len);
+      auto unshared_k_cache =
+          full_k_cache.slice(0, unshared_offset, full_kv_len);
+      auto unshared_v_cache =
+          full_v_cache.slice(0, unshared_offset, full_kv_len);
       // LOG(INFO) << "unshared_k_cache.shape: " << unshared_k_cache.sizes();
       // LOG(INFO) << "unshared_v_cache.shape: " << unshared_v_cache.sizes();
-      unshared_k_cache = unshared_k_cache.view({batch_size, beam_size, max_decode_step, num_kv_heads_, head_size_});
-      unshared_v_cache = unshared_v_cache.view({batch_size, beam_size, max_decode_step, num_kv_heads_, head_size_});
+      unshared_k_cache = unshared_k_cache.view(
+          {batch_size, beam_size, max_decode_step, num_kv_heads_, head_size_});
+      unshared_v_cache = unshared_v_cache.view(
+          {batch_size, beam_size, max_decode_step, num_kv_heads_, head_size_});
 
-
-      xllm::kernel::cuda::decoder_reshape_and_cache(key,
-                                                    value,
-                                                    unshared_k_cache,
-                                                    unshared_v_cache,
-                                                    attn_metadata.naive_block_table,
-                                                    attn_metadata.step);
+      xllm::kernel::cuda::decoder_reshape_and_cache(
+          key,
+          value,
+          unshared_k_cache,
+          unshared_v_cache,
+          attn_metadata.naive_block_table,
+          attn_metadata.step);
 
       full_k_cache = full_k_cache.unsqueeze(1);
       full_v_cache = full_v_cache.unsqueeze(1);
-
 
       {
         LLM_NVTX_RANGE_COLOR("batch_decode_unshared", 0xFFFF0000);  // Red

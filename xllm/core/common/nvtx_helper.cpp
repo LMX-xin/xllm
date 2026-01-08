@@ -53,4 +53,3 @@ NvtxRange::~NvtxRange() {
 #endif
 
 }  // namespace xllm
-

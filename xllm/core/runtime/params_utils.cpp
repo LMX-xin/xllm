@@ -85,7 +85,8 @@ void proto_to_forward_input(const proto::ForwardInput* pb_forward_input,
       std::vector<int32_t>(pb_forward_input->paged_kv_last_page_len().begin(),
                            pb_forward_input->paged_kv_last_page_len().end());
   std::vector<std::vector<int32_t>> block_tables_vec;
-  // LOG(INFO) << "pb_forward_input->block_tables_vec().size(): " << pb_forward_input->block_tables_vec().size();
+  // LOG(INFO) << "pb_forward_input->block_tables_vec().size(): " <<
+  // pb_forward_input->block_tables_vec().size();
   for (size_t i = 0; i < pb_forward_input->block_tables_vec().size(); ++i) {
     block_tables_vec.emplace_back(std::vector<int32_t>(
         pb_forward_input->block_tables_vec()[i].block_tables().begin(),
@@ -94,7 +95,8 @@ void proto_to_forward_input(const proto::ForwardInput* pb_forward_input,
     // global_rank_);
   }
   // for (size_t i = 0; i < block_tables_vec.size(); ++i) {
-  //   LOG(INFO) << "block_tables_vec[" << i << "].size(): " << block_tables_vec[i].size();
+  //   LOG(INFO) << "block_tables_vec[" << i << "].size(): " <<
+  //   block_tables_vec[i].size();
   // }
   // LOG(INFO) << "block_tables_vec.size(): " << block_tables_vec.size();
   std::vector<int32_t> selected_token_idxes =
@@ -332,7 +334,8 @@ void proto_to_forward_input(const proto::ForwardInput* pb_forward_input,
   input_params.new_cache_slots =
       torch::tensor(new_token_slot_ids, tensor_options);
   // for (size_t i = 0; i < block_tables_vec.size(); ++i) {
-  //   LOG(INFO) << "block_tables_vec[" << i << "].size(): " << block_tables_vec[i].size();
+  //   LOG(INFO) << "block_tables_vec[" << i << "].size(): " <<
+  //   block_tables_vec[i].size();
   // }
   util::pad_2d_vector(block_tables_vec, /*pad_value=*/0);
   input_params.block_tables =

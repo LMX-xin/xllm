@@ -55,11 +55,11 @@ void batch_prefill(torch::Tensor float_workspace_buffer,
                    torch::Tensor kv_cu_seq_lens,
                    int64_t window_left,
                    double sm_scale,
-                  torch::Tensor output,
-                  std::optional<torch::Tensor>& output_lse,
-                  bool enable_cuda_graph,
-                  std::optional<torch::Tensor>& plan_info,
-                  bool is_decode_shared = false);
+                   torch::Tensor output,
+                   std::optional<torch::Tensor>& output_lse,
+                   bool enable_cuda_graph,
+                   std::optional<torch::Tensor>& plan_info,
+                   bool is_decode_shared = false);
 
 void batch_decode(torch::Tensor float_workspace_buffer,
                   torch::Tensor int_workspace_buffer,
@@ -98,11 +98,11 @@ void lse_combine(torch::Tensor output,
                  torch::Tensor unshared_lse);
 
 void decoder_reshape_and_cache(torch::Tensor proj_k,
-                                torch::Tensor proj_v,
-                                torch::Tensor unshared_k_cache,
-                                torch::Tensor unshared_v_cache,
-                                torch::Tensor block_table,
-                                uint32_t step);
+                               torch::Tensor proj_v,
+                               torch::Tensor unshared_k_cache,
+                               torch::Tensor unshared_v_cache,
+                               torch::Tensor block_table,
+                               uint32_t step);
 
 void cache_select(const torch::Tensor& beam_index,
                   std::vector<torch::Tensor>& unshared_k_cache,
