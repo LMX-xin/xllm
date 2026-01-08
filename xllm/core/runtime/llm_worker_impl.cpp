@@ -667,7 +667,15 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
           // LOG(INFO) << "round: " << round;
           torch::Tensor naive_block_table = torch::arange(batch, int_options).unsqueeze(1);
 
-          rec_kernel_->cache_select(out_token_index,
+          // rec_kernel_->cache_select(out_token_index,
+          //                           unshared_k_caches,
+          //                           unshared_v_caches,
+          //                           naive_block_table,
+          //                           out_beam_count_prefix_sums,
+          //                           round - 1, //对应第0步decode
+          //                           beam_width,
+          //                           layer_num);
+          xllm::kernel::cuda::cache_select(out_token_index,
                                     unshared_k_caches,
                                     unshared_v_caches,
                                     naive_block_table,

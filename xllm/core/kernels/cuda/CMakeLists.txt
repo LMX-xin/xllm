@@ -40,6 +40,19 @@ cc_test(
 )
 target_link_libraries(beam_search_test PRIVATE brpc)
 
+cc_test(
+  NAME
+    cache_select_test
+  SRCS
+    cache_select_test.cpp
+  DEPS
+    :cuda_kernels
+    torch
+    GTest::gtest_main
+    glog::glog
+)
+target_link_libraries(cache_select_test PRIVATE brpc)
+
 cc_library(
   NAME
     cuda_kernels
