@@ -19,7 +19,7 @@ from setuptools.command.bdist_wheel import bdist_wheel
 from setuptools.command.build_ext import build_ext
 
 BUILD_TEST_FILE = True
-BUILD_EXPORT = True
+BUILD_EXPORT = False
 
 # get cpu architecture
 def get_cpu_arch():

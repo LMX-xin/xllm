@@ -7,6 +7,21 @@
 #include <torch/script.h>
 #include <torch/torch.h>
 
+// Forward declaration for CUDA beam_search kernel
+namespace xllm::kernel::cuda {
+void beam_search(torch::Tensor acc_logprob,
+                 torch::Tensor in_sequence_group,
+                 torch::Tensor top_tokens,
+                 torch::Tensor top_logprobs,
+                 torch::Tensor out_acc_logprob,
+                 torch::Tensor out_token_ids,
+                 torch::Tensor out_token_index,
+                 torch::Tensor out_beam_count_prefix_sums,
+                 torch::Tensor out_sequence_group,
+                 uint32_t batch_size,
+                 uint32_t current_step);
+}
+
 namespace xllm::kernel::cuda::triton {
 RecTorchKernel::RecTorchKernel() {
 
@@ -416,6 +431,20 @@ void RecTorchKernel::beam_search(torch::Tensor acc_logprob,
 
     out_sequence_group.slice(2, current_step, current_step + 1) = new_tokens.unsqueeze(2);
   }
+
+  // Call CUDA kernel implementation
+  // xllm::kernel::cuda::beam_search(
+  //   acc_logprob,
+  //   in_sequence_group,
+  //   top_tokens,
+  //   top_logprobs,
+  //   out_acc_logprob,
+  //   out_token_ids,
+  //   out_token_index,
+  //   out_beam_count_prefix_sums,
+  //   out_sequence_group,
+  //   batch_size,
+  //   current_step);
 }
 
 void RecTorchKernel::cache_select(const torch::Tensor& beam_index,        // [batch * beam, 1] - out_token_index

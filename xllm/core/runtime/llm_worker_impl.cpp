@@ -438,9 +438,9 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
   int32_t full_kv_len = input.input_params.full_k_caches[0].size(0);
   int32_t unshared_offset = batch * FLAGS_max_token_per_req;
   int32_t max_decode_step = total_rounds - 1;
-  LOG(INFO) << "full_kv_len: " << full_kv_len;
-  LOG(INFO) << "unshared_offset: " << unshared_offset;
-  LOG(INFO) << "max_decode_step: " << max_decode_step;
+  // LOG(INFO) << "full_kv_len: " << full_kv_len;
+  // LOG(INFO) << "unshared_offset: " << unshared_offset;
+  // LOG(INFO) << "max_decode_step: " << max_decode_step;
   for (auto i = 0; i < layer_num; ++i) {
     auto full_k_cache = input.input_params.full_k_caches[i];
     auto full_v_cache = input.input_params.full_v_caches[i];
@@ -614,18 +614,22 @@ std::optional<ForwardOutput> LLMWorkerImpl::step_multi_round(
       // LOG(INFO) << "out_token_index: " << out_token_index;
       // LOG(INFO) << "out_beam_count_prefix_sums: " << out_beam_count_prefix_sums;
       // LOG(INFO) << "out_seqgroup: " << out_seqgroup;
-      rec_kernel_->beam_search(acc_logprob, 
-                               sequence_group, 
-                               top_tokens, 
-                               top_logprobs, 
-                               out_log_probs,
-                               out_token_ids,
-                               out_token_index, 
-                               out_beam_count_prefix_sums, 
-                               out_seqgroup, 
-                               batch, 
-                               round
-                               );
+      {
+        LLM_NVTX_RANGE_COLOR("beam_search", 0xFF00FF00);  // Green
+        rec_kernel_->beam_search(acc_logprob, 
+          sequence_group, 
+          top_tokens, 
+          top_logprobs, 
+          out_log_probs,
+          out_token_ids,
+          out_token_index, 
+          out_beam_count_prefix_sums, 
+          out_seqgroup, 
+          batch, 
+          round
+          );
+      }
+      
       // LOG(INFO) << "after beam_search.";
       // LOG(INFO) << "out_log_probs: " << out_log_probs;
       // LOG(INFO) << "out_token_ids: " << out_token_ids;
