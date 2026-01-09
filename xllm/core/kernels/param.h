@@ -283,6 +283,9 @@ struct AttentionParams {
   // Supported values: -1 (no quant), 4 (int4), 8 (int8).
   // If 4, k_cache and v_cache shapes are adjusted for int4 packing.
   int64_t kv_cache_quant_bit_size = -1;
+  // Cached plan_info for batch_prefill optimization (reused across layers).
+  // Managed by AttentionMetadata, passed through AttentionParams.
+  std::optional<torch::Tensor> plan_info;
 };
 
 // Fused layer norm parameters

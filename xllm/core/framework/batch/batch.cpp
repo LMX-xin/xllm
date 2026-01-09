@@ -223,6 +223,7 @@ RawForwardInput Batch::prepare_multi_step_forward_input(
                                      swap_block_transfer_infos_,
                                      batch_id_,
                                      &args,
+                                     batch_forward_type_,
                                      thread_pool);
   return builder.build_raw_forward_input();
 }

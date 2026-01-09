@@ -233,45 +233,46 @@ void proto_to_forward_input(const proto::ForwardInput* pb_forward_input,
   // Compact meta for step-level decode with beam search: keep one copy per
   // original batch Instead of expanding kv_seq_lens/q_seq_lens/block_tables to
   // [batch*beam], compress them back to [batch] and [batch, max_blocks].
-  {
-    const int32_t beam_width = pb_forward_input->beam_width();
-    const int32_t total_seqs = num_sequences;
-    if (beam_width > 1 && total_seqs >= beam_width &&
-        total_seqs % beam_width == 0) {
-      const int32_t batch_size = total_seqs / beam_width;
-      // Build gather indices: 0, beam, 2*beam, ...
-      std::vector<int32_t> gather_idx;
-      gather_idx.reserve(batch_size);
-      for (int32_t b = 0; b < batch_size; ++b)
-        gather_idx.push_back(b * beam_width);
+  // {
+  //   const int32_t beam_width = pb_forward_input->beam_width();
+  //   const int32_t total_seqs = num_sequences;
+  //   if (beam_width > 1 && total_seqs >= beam_width &&
+  //       total_seqs % beam_width == 0) {
+  //     // const int32_t batch_size = total_seqs / beam_width;
+  //     const int32_t batch_size = total_seqs;
+  //     // Build gather indices: 0, beam, 2*beam, ...
+  //     std::vector<int32_t> gather_idx;
+  //     gather_idx.reserve(batch_size);
+  //     for (int32_t b = 0; b < batch_size; ++b)
+  //       gather_idx.push_back(b * beam_width);
 
-      // kv_seq_lens/q_seq_lens -> [batch]
-      if (static_cast<int32_t>(seq_lens.size()) == total_seqs) {
-        std::vector<int32_t> compact;
-        compact.reserve(batch_size);
-        for (auto id : gather_idx) compact.push_back(seq_lens[id]);
-        seq_lens.swap(compact);
-      }
-      if (static_cast<int32_t>(q_seq_lens.size()) == total_seqs) {
-        std::vector<int32_t> compact;
-        compact.reserve(batch_size);
-        for (auto id : gather_idx) compact.push_back(q_seq_lens[id]);
-        q_seq_lens.swap(compact);
-      }
+  //     // kv_seq_lens/q_seq_lens -> [batch]
+  //     if (static_cast<int32_t>(seq_lens.size()) == total_seqs) {
+  //       std::vector<int32_t> compact;
+  //       compact.reserve(batch_size);
+  //       for (auto id : gather_idx) compact.push_back(seq_lens[id]);
+  //       seq_lens.swap(compact);
+  //     }
+  //     if (static_cast<int32_t>(q_seq_lens.size()) == total_seqs) {
+  //       std::vector<int32_t> compact;
+  //       compact.reserve(batch_size);
+  //       for (auto id : gather_idx) compact.push_back(q_seq_lens[id]);
+  //       q_seq_lens.swap(compact);
+  //     }
 
-      // block_tables -> [batch, max_blocks]
-      if (static_cast<int32_t>(block_tables_vec.size()) == total_seqs) {
-        std::vector<std::vector<int32_t>> compact;
-        compact.reserve(batch_size);
-        for (auto id : gather_idx)
-          compact.emplace_back(std::move(block_tables_vec[id]));
-        block_tables_vec.swap(compact);
-      }
+  //     // block_tables -> [batch, max_blocks]
+  //     if (static_cast<int32_t>(block_tables_vec.size()) == total_seqs) {
+  //       std::vector<std::vector<int32_t>> compact;
+  //       compact.reserve(batch_size);
+  //       for (auto id : gather_idx)
+  //         compact.emplace_back(std::move(block_tables_vec[id]));
+  //       block_tables_vec.swap(compact);
+  //     }
 
-      // Update num_sequences after compaction
-      num_sequences = static_cast<int32_t>(block_tables_vec.size());
-    }
-  }
+  //     // Update num_sequences after compaction
+  //     num_sequences = static_cast<int32_t>(block_tables_vec.size());
+  //   }
+  // }
 
   // Create ForwardInput on cpu pinned memory here
   auto tensor_options = torch::TensorOptions()
@@ -459,9 +460,9 @@ void proto_to_forward_input(const proto::ForwardInput* pb_forward_input,
   forward_inputs.beam_width = pb_forward_input->beam_width();
   forward_inputs.current_round = pb_forward_input->current_round();
   forward_inputs.total_round = pb_forward_input->total_round();
-  forward_inputs.shared_kv_shape =
-      std::vector<int64_t>(pb_forward_input->shared_kv_shape().begin(),
-                           pb_forward_input->shared_kv_shape().end());
+  forward_inputs.full_kv_shape =
+      std::vector<int64_t>(pb_forward_input->full_kv_shape().begin(),
+                           pb_forward_input->full_kv_shape().end());
 
   if (pb_forward_input->has_mm_data()) {
     util::proto_to_mmdata(pb_forward_input->mm_data(), &input_params.mm_data);
@@ -681,8 +682,8 @@ void forward_input_to_proto(const RawForwardInput& inputs,
   pb_forward_input->set_beam_width(inputs.beam_width);
   pb_forward_input->set_current_round(inputs.current_round);
   pb_forward_input->set_total_round(inputs.total_round);
-  ADD_VECTOR_TO_PROTO(pb_forward_input->mutable_shared_kv_shape(),
-                      inputs.shared_kv_shape);
+  ADD_VECTOR_TO_PROTO(pb_forward_input->mutable_full_kv_shape(),
+                      inputs.full_kv_shape);
   COUNTER_ADD(proto_latency_seconds_i2proto, timer.elapsed_seconds());
 }
 
