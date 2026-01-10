@@ -294,7 +294,15 @@ bool RecWorkerImpl::LlmRecPureDevicePipeline::create_model(
 
 ForwardInput RecWorkerImpl::LlmRecPureDevicePipeline::prepare_inputs(
     Batch& batch) {
-  return worker_.WorkerImpl::prepare_inputs(batch);
+  // return worker_.WorkerImpl::prepare_inputs(batch);
+  ThreadPool* thread_pool = worker_.input_builder_thread_pool_
+                                ? worker_.input_builder_thread_pool_.get()
+                                : nullptr;
+
+  return batch.prepare_rec_forward_input(worker_.options_.num_decoding_tokens(),
+                                         /*min_decoding_batch_size=*/0,
+                                         worker_.context_.get_model_args(),
+                                         thread_pool);
 }
 
 void RecWorkerImpl::LlmRecPureDevicePipeline::prepare_work_before_execute(
