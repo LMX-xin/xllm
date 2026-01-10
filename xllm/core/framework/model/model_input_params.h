@@ -224,6 +224,7 @@ struct ModelInputParams {
     params.num_sequences = num_sequences;
     params.kv_max_seq_len = kv_max_seq_len;
     params.q_max_seq_len = q_max_seq_len;
+    params.is_prefill = is_prefill;
 
     params.kv_seq_lens = safe_to(kv_seq_lens, device, true);
     params.q_seq_lens = safe_to(q_seq_lens, device, true);
@@ -233,6 +234,11 @@ struct ModelInputParams {
     params.block_tables = safe_to(block_tables, device, true);
     params.kv_seq_lens_vec = kv_seq_lens_vec;
     params.q_seq_lens_vec = q_seq_lens_vec;
+
+    params.decode_kv_seq_lens = safe_to(decode_kv_seq_lens, device, true);
+    params.decode_q_seq_lens = safe_to(decode_q_seq_lens, device, true);
+    params.decode_kv_seq_lens_vec = decode_kv_seq_lens_vec;
+    params.decode_q_seq_lens_vec = decode_q_seq_lens_vec;
 
     params.input_embedding = safe_to(input_embedding, device);
 
@@ -268,12 +274,38 @@ struct ModelInputParams {
     params.new_cache_slot_offsets = safe_to(new_cache_slot_offsets, device);
     params.kv_cache_start_offsets = safe_to(kv_cache_start_offsets, device);
 
+    // shared kv caches per layer (optional)
+    params.full_k_caches.clear();
+    params.full_v_caches.clear();
+    for (const auto& t : full_k_caches) {
+      params.full_k_caches.push_back(safe_to(t, device));
+    }
+    for (const auto& t : full_v_caches) {
+      params.full_v_caches.push_back(safe_to(t, device));
+    }
+    params.beam_width_tensor = safe_to(beam_width_tensor, device);
+    params.current_round_tensor = safe_to(current_round_tensor, device);
+    params.current_round_tensor_list.clear();
+    for (const auto& t : current_round_tensor_list) {
+      params.current_round_tensor_list.push_back(safe_to(t, device));
+    }
+    params.decode_positions_tensor_list.clear();
+    for (const auto& t : decode_positions_tensor_list) {
+      params.decode_positions_tensor_list.push_back(safe_to(t, device));
+    }
+
+    params.beam_width = beam_width;
+    params.current_round = current_round;
+    params.total_round = total_round;
+
     // Copy graph_buffer to device
     // params.graph_buffer = safe_to(graph_buffer, device, true);
     params.graph_buffer.attn_mask =
         safe_to(graph_buffer.attn_mask, device, true);
     params.graph_buffer.tiling_data =
         safe_to(graph_buffer.tiling_data, device, true);
+    // Copy rec graph buffer tensor to device
+    params.graph_buffer_rec = safe_to(graph_buffer_rec, device, true);
 
     // params for flashinfer
     params.paged_kv_indptr = safe_to(paged_kv_indptr, device);
@@ -304,6 +336,8 @@ struct ModelInputParams {
     print_tensor(q_cu_seq_lens, "ModelInputParams: q_cu_seq_lens", 4);
     print_tensor(new_cache_slots, "ModelInputParams: new_cache_slots", 4);
     print_tensor(block_tables, "ModelInputParams: block_tables", 4);
+    print_tensor(decode_kv_seq_lens, "ModelInputParams: decode_kv_seq_lens", 4);
+    print_tensor(decode_q_seq_lens, "ModelInputParams: decode_q_seq_lens", 4);
     LOG(INFO) << "ModelInputParams: dp_global_token_nums is "
               << dp_global_token_nums << ", dp_is_decode: " << dp_is_decode;
 
@@ -338,6 +372,9 @@ struct ModelInputParams {
 
   // whether the kv-cache is empty for all sequences.
   bool empty_kv_cache = true;
+
+  // whether this pass is prefill stage
+  bool is_prefill = true;
   // whether the kv-cache is empty for all sequences,mainly used for dp case
   bool global_empty_kv_cache = true;
 
@@ -350,6 +387,13 @@ struct ModelInputParams {
   int32_t kv_max_seq_len = 0;
   int32_t q_max_seq_len = 0;
 
+  // for multi-round decode with shared KV cache
+  // computed once per step in step_multi_round, reused across all layers
+  torch::Tensor decode_paged_kv_indices;  // filtered indices after mask
+  torch::Tensor decode_paged_kv_indptr;   // cumulative indptr
+  torch::Tensor
+      decode_paged_kv_last_page_len;  // last page len for each sequence
+
   uint64_t batch_id;
 
   torch::Tensor q_seq_lens;
@@ -357,6 +401,11 @@ struct ModelInputParams {
   torch::Tensor q_cu_seq_lens;
   std::vector<int> kv_seq_lens_vec;
   std::vector<int> q_seq_lens_vec;
+
+  torch::Tensor decode_q_seq_lens;
+  torch::Tensor decode_kv_seq_lens;
+  std::vector<int> decode_kv_seq_lens_vec;
+  std::vector<int> decode_q_seq_lens_vec;
 
   // IntTensor: [n_tokens]
   torch::Tensor new_cache_slots;
@@ -459,6 +508,28 @@ struct ModelInputParams {
     torch::Tensor tiling_data;
   };
   GraphBuffer graph_buffer;
+
+  torch::Tensor graph_buffer_rec;
+
+  // full kv caches provided by engine for step-level decode, per layer
+  std::vector<torch::Tensor> full_k_caches;
+  std::vector<torch::Tensor> full_v_caches;
+  torch::Tensor beam_width_tensor;
+  torch::Tensor current_round_tensor;
+  std::vector<torch::Tensor> current_round_tensor_list;
+  std::vector<torch::Tensor> decode_positions_tensor_list;
+  // beam width for step-level decode
+  int32_t beam_width = 1;
+  // current round for step-level decode
+  int32_t current_round = 0;
+  int32_t total_round = 0;
+  int32_t num_heads = 0;
+  int32_t head_dim = 0;
+
+  // Cached plan_info for batch_prefill optimization (reused across layers)
+  // Generated in llm_worker_impl.cpp for prefill mode
+  std::optional<torch::Tensor> prefill_plan_info;
+  std::optional<torch::Tensor> decode_plan_info;
 };
 
 }  // namespace xllm

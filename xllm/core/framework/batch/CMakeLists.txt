@@ -12,6 +12,7 @@ cc_library(
     batch_input_builder.h
     rec_batch_input_builder.h
     onerec_batch_input_builder.h
+    multi_step_batch_input_builder.h
     mposition.h
   SRCS
     dit_batch.cpp
@@ -20,6 +21,7 @@ cc_library(
     batch_input_builder.cpp
     rec_batch_input_builder.cpp
     onerec_batch_input_builder.cpp
+    multi_step_batch_input_builder.cpp
     mposition.cpp
     beam_search.h
   DEPS
