@@ -92,6 +92,9 @@ class Batch {
   RawForwardInput prepare_multi_step_forward_input(
       const ModelArgs& args,
       ThreadPool* thread_pool = nullptr);
+  ForwardInput prepare_multi_step_forward_input_forward(
+      const ModelArgs& args,
+      ThreadPool* thread_pool = nullptr);
 
   // process output
   //
@@ -118,6 +121,7 @@ class Batch {
                                          bool replace_fake_token);
 
   void process_beam_sequence_group(const RawForwardOutput& raw_output);
+  void process_beam_sequence_group(const ForwardOutput& output);
 
   const std::vector<uint32_t>& get_allowed_max_tokens() const {
     return allowed_max_tokens_;

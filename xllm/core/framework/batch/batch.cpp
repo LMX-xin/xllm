@@ -228,6 +228,22 @@ RawForwardInput Batch::prepare_multi_step_forward_input(
   return builder.build_raw_forward_input();
 }
 
+ForwardInput Batch::prepare_multi_step_forward_input_forward(
+    const ModelArgs& args,
+    ThreadPool* thread_pool) {
+  dp_balance_shuffle_seqs();
+  MultiStepBatchInputBuilder builder(sequences_,
+                                     allowed_max_tokens_,
+                                     input_embeddings_vec_,
+                                     mm_data_vec_,
+                                     swap_block_transfer_infos_,
+                                     batch_id_,
+                                     &args,
+                                     batch_forward_type_,
+                                     thread_pool);
+  return builder.build_forward_input();
+}
+
 void Batch::process_sample_output(const RawForwardOutput& raw_output,
                                   bool replace_fake_token) {
   // if raw_output.outputs.size() value is 0,
@@ -490,75 +506,6 @@ void Batch::process_beam_search_output(const RawForwardOutput& raw_output,
   }
 }
 
-void Batch::process_decode_beam_search_output(
-    const RawForwardOutput& raw_output,
-    bool replace_fake_token) {
-  const int32_t beam_width = sequences_[0]->sampling_param()->beam_width;
-  if (beam_width <= 1) {
-    return;
-  }
-  LOG(ERROR) << "[Batch::process_decode_beam_search_output] seqs="
-             << sequences_.size()
-             << " src_seq_idxes=" << raw_output.src_seq_idxes.size()
-             << " out_tokens=" << raw_output.out_tokens.size()
-             << " out_logprobs=" << raw_output.out_logprobs.size();
-  CHECK_EQ(raw_output.src_seq_idxes.size(), sequences_.size());
-  CHECK_EQ(raw_output.out_tokens.size(), sequences_.size());
-  CHECK_EQ(raw_output.out_logprobs.size(), sequences_.size());
-
-  auto update_for_sequence_group = [&](size_t sequence_group_id) {
-    std::unordered_set<int32_t> seq_idx_set;
-    std::vector<float> src_acc_logprob_vec;
-    std::vector<std::vector<int32_t>> src_token_ids;
-    std::vector<std::vector<std::optional<float>>> src_logprobs;
-    src_acc_logprob_vec.resize(beam_width);
-    src_token_ids.resize(beam_width);
-    src_logprobs.resize(beam_width);
-
-    for (size_t i = 0; i < beam_width; i++) {
-      size_t task_id = sequence_group_id * beam_width + i;
-      int32_t src_seq_idx = raw_output.src_seq_idxes[task_id];
-      CHECK_LE(src_seq_idx, sequences_.size());
-      auto src_seq = sequences_[src_seq_idx];
-      src_acc_logprob_vec[i] =
-          src_seq->get_average_logprob() * src_seq->num_generated_tokens();
-      src_token_ids[i] = std::vector<int32_t>(src_seq->tokens());
-      src_logprobs[i] = src_seq->logprob_state()->get_logprobs();
-    }
-
-    for (size_t i = 0; i < beam_width; i++) {
-      size_t task_id = sequence_group_id * beam_width + i;
-      int32_t src_seq_idx = raw_output.src_seq_idxes[task_id];
-      CHECK_LE(src_seq_idx, sequences_.size());
-      auto& base_seq = sequences_[task_id];
-      auto& src_seq = sequences_[src_seq_idx];
-
-      for (size_t token_idx = base_seq->num_prompt_tokens();
-           token_idx < base_seq->num_tokens();
-           token_idx++) {
-        Token new_token(src_token_ids[i][token_idx]);
-        new_token.logprob = src_logprobs[i][token_idx];
-        base_seq->update_token(token_idx, new_token);
-      }
-
-      Token new_token(raw_output.out_tokens[task_id]);
-      new_token.logprob =
-          raw_output.out_logprobs[task_id] - src_acc_logprob_vec[i];
-      append_token_for_sequence(base_seq, new_token, 0, replace_fake_token);
-
-      base_seq->logprob_state()->set_acc_logprob(
-          raw_output.out_logprobs[task_id]);
-      base_seq->logprob_state()->set_last_acc_token_idx(base_seq->num_tokens());
-    }
-  };
-
-  for (size_t sequence_group_id = 0;
-       sequence_group_id < sequence_groups_.size();
-       sequence_group_id++) {
-    update_for_sequence_group(sequence_group_id);
-  }
-}
-
 void Batch::process_beam_sequence_group(const RawForwardOutput& raw_output) {
   const int32_t beam_width = sequences_[0]->sampling_param()->beam_width;
   if (beam_width <= 1) {
@@ -586,6 +533,58 @@ void Batch::process_beam_sequence_group(const RawForwardOutput& raw_output) {
       group_flat2d.emplace_back(std::move(row_tokens));
       if (!raw_output.out_logprobs.empty()) {
         last_logprobs.push_back(raw_output.out_logprobs[row]);
+      }
+    }
+    sequences_[g]->set_beam_result(
+        beam_width, total_rounds, group_flat2d, last_logprobs);
+  }
+}
+
+void Batch::process_beam_sequence_group(const ForwardOutput& output) {
+  const int32_t beam_width = sequences_[0]->sampling_param()->beam_width;
+  if (beam_width <= 1) {
+    return;
+  }
+  if (!output.beam_sequence_group.defined() ||
+      output.beam_sequence_group.numel() == 0) {
+    LOG(ERROR) << "beam_sequence_group is empty or not defined";
+    return;
+  }
+  int32_t total_rounds = FLAGS_max_decode_rounds;
+  size_t num_groups = sequence_groups_.size();
+
+  // Convert tensor to CPU and access data
+  auto beam_sequence_group_cpu = output.beam_sequence_group.to(torch::kCPU);
+  auto* beam_data = beam_sequence_group_cpu.data_ptr<int32_t>();
+
+  // Extract out_logprobs if available
+  std::vector<float> out_logprobs_vec;
+  if (output.beam_search_output.out_logprobs.defined() &&
+      output.beam_search_output.out_logprobs.numel() > 0) {
+    auto out_logprobs_cpu =
+        output.beam_search_output.out_logprobs.to(torch::kCPU);
+    auto* logprobs_data = out_logprobs_cpu.data_ptr<float>();
+    out_logprobs_vec = std::vector<float>(
+        logprobs_data, logprobs_data + out_logprobs_cpu.numel());
+  }
+
+  for (size_t g = 0; g < num_groups; ++g) {
+    std::vector<std::vector<int32_t>> group_flat2d;
+    group_flat2d.reserve(static_cast<size_t>(beam_width));
+    std::vector<float> last_logprobs;
+    last_logprobs.reserve(static_cast<size_t>(beam_width));
+    for (int b = 0; b < beam_width; ++b) {
+      int row = static_cast<int>(g) * beam_width + b;
+      std::vector<int32_t> row_tokens;
+      row_tokens.reserve(static_cast<size_t>(total_rounds));
+      for (int c = 0; c < total_rounds; ++c) {
+        int idx = row * total_rounds + c;
+        row_tokens.push_back(beam_data[idx]);
+      }
+      group_flat2d.emplace_back(std::move(row_tokens));
+      if (!out_logprobs_vec.empty() &&
+          row < static_cast<int>(out_logprobs_vec.size())) {
+        last_logprobs.push_back(out_logprobs_vec[row]);
       }
     }
     sequences_[g]->set_beam_result(

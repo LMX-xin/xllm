@@ -57,6 +57,9 @@ class MultiStepBatchInputBuilder {
   // Build multi-step raw forward input for the whole batch.
   RawForwardInput build_raw_forward_input();
 
+  // Build multi-step forward input for the whole batch.
+  ForwardInput build_forward_input();
+
   // Local builder state (copy of the legacy BatchInputBuilder::BuilderState)
   struct BuilderState {
     // Token and position data

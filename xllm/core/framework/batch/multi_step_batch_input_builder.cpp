@@ -178,6 +178,18 @@ RawForwardInput MultiStepBatchInputBuilder::build_raw_forward_input() {
   return state_to_raw_forward_input(&multi_step_state_.base_state);
 }
 
+ForwardInput MultiStepBatchInputBuilder::build_forward_input() {
+  // Reset multi-step state for this build
+  multi_step_state_.total_steps = FLAGS_max_decode_rounds;
+
+  is_mtp_decode_ = false;
+  // Single-threaded processing for now; can be extended to use thread_pool_
+  for (int32_t i = 0; i < static_cast<int32_t>(sequences_.size()); ++i) {
+    process_single_sequence(i, &multi_step_state_.base_state, nullptr);
+  }
+  return state_to_forward_input();
+}
+
 void MultiStepBatchInputBuilder::extract_tokens_and_positions(
     Sequence* sequence,
     uint32_t n_kv_cache_tokens,
@@ -398,26 +410,112 @@ void MultiStepBatchInputBuilder::setup_continuous_kv_cache_info(
 }
 
 ForwardInput MultiStepBatchInputBuilder::state_to_forward_input() {
-  // No current caller relies on the ForwardInput path for multi-step;
-  // keep a minimal implementation that mirrors the RawForwardInput metadata.
+  BuilderState& state = multi_step_state_.base_state;
+  if (state.flatten_tokens_vec.empty()) {
+    return {};
+  }
+
   ForwardInput forward_input;
 
-  // Add multi-step specific data using existing ForwardInput fields
+  // Create tensors (same as BatchInputBuilder)
+  forward_input.token_ids =
+      torch::tensor(state.flatten_tokens_vec, torch::kInt);
+
+  if (!use_mrope_) {
+    forward_input.positions =
+        torch::tensor(state.flatten_positions_vec, torch::kInt);
+  } else {
+    forward_input.positions = torch::cat(state.mrope_positions_vec, 1);
+  }
+
+  auto& input_params = forward_input.input_params;
+  input_params.empty_kv_cache = state.empty_kv_cache;
+  input_params.batch_forward_type = state.batch_forward_type;
+  input_params.num_sequences = state.block_tables_vec.size();
+  input_params.kv_max_seq_len = state.max_seq_len;
+  input_params.q_max_seq_len = state.q_max_seq_len;
+  input_params.kv_seq_lens = torch::tensor(state.seq_lens, torch::kInt);
+  input_params.q_seq_lens = torch::tensor(state.q_seq_lens, torch::kInt);
+  input_params.kv_seq_lens_vec = std::move(state.seq_lens);
+  input_params.q_seq_lens_vec = std::move(state.q_seq_lens);
+  input_params.new_cache_slots =
+      torch::tensor(state.new_token_slot_ids, torch::kInt);
+
+  // for flashinfer
+  input_params.paged_kv_indptr =
+      torch::tensor(state.paged_kv_indptr, torch::kInt);
+  input_params.paged_kv_indices =
+      torch::tensor(state.paged_kv_indices, torch::kInt);
+  input_params.paged_kv_last_page_len =
+      torch::tensor(state.paged_kv_last_page_len, torch::kInt);
+
+  // Setup multimodal data
+  input_params.mm_data = MMData::batch(mm_data_vec_);
+
+  // Setup block tables
+  util::pad_2d_vector(state.block_tables_vec, /*pad_value=*/0);
+  input_params.block_tables =
+      create_2d_tensor(state.block_tables_vec, torch::kInt);
+
+  if (input_embeddings_vec_.size() != 0) {
+    input_params.input_embedding = torch::cat(input_embeddings_vec_);
+  }
+
+  if (swap_block_transfer_infos_ != nullptr &&
+      swap_block_transfer_infos_->size() > 0) {
+    input_params.swap_blocks.insert(input_params.swap_blocks.end(),
+                                    swap_block_transfer_infos_->begin(),
+                                    swap_block_transfer_infos_->end());
+  }
+
+  if (FLAGS_enable_continuous_kvcache) {
+    input_params.new_cache_slots =
+        torch::tensor(state.new_cache_slot_offsets, torch::kInt64);
+    input_params.kv_cache_start_offsets =
+        torch::tensor(state.kv_cache_start_offsets, torch::kInt64);
+  }
+
+  CHECK_EQ(state.sampling_params.size(), state.selected_token_idxes.size());
+  // Setup sampling parameters
+  if (!state.selected_token_idxes.empty()) {
+    util::pad_2d_vector<int64_t>(state.unique_token_ids_vec, /*pad_value=*/0);
+    util::pad_2d_vector(state.unique_token_counts_vec, /*pad_value=*/0);
+
+    forward_input.sampling_params.init(state.sampling_params,
+                                       state.selected_token_idxes,
+                                       state.sample_idxes,
+                                       state.unique_token_ids_vec,
+                                       state.unique_token_counts_vec,
+                                       state.unique_token_lens_vec);
+  }
+
+  // Multi-step specific metadata
   auto& multi_step_state = multi_step_state_;
   multi_step_state.total_steps = FLAGS_max_decode_rounds;
-
-  // Set step-level decode metadata for multi-step processing
-  // These fields are already present in ForwardInput for step-level decode
   forward_input.beam_width = FLAGS_beam_width;
   forward_input.total_round = multi_step_state.total_steps;
 
+  // Setup decoder sampling parameters for multi-step decode
+  if (!multi_step_state.decode_selected_token_idxes.empty()) {
+    CHECK_EQ(multi_step_state.decode_sampling_params.size(),
+             multi_step_state.decode_selected_token_idxes.size());
+    util::pad_2d_vector<int64_t>(multi_step_state.decode_unique_token_ids_vec,
+                                 /*pad_value=*/0);
+    util::pad_2d_vector(multi_step_state.decode_unique_token_counts_vec,
+                        /*pad_value=*/0);
+
+    forward_input.decoder_sampling_params.init(
+        multi_step_state.decode_sampling_params,
+        multi_step_state.decode_selected_token_idxes,
+        multi_step_state.decode_sample_idxes,
+        multi_step_state.decode_unique_token_ids_vec,
+        multi_step_state.decode_unique_token_counts_vec,
+        multi_step_state.decode_unique_token_lens_vec);
+  }
+
   // Set full_kv_shape if we have multi-step decode data
   if (!multi_step_state.decode_seq_lens.empty() && !sequences_.empty()) {
-    // Set decode kv cache shape for step-level decode
-    // Format: [batch_size * beam_width, n_kv_heads, step_rounds, head_dim]
     int64_t batch_size = static_cast<int64_t>(sequences_.size());
-    int64_t step_rounds = static_cast<int64_t>(multi_step_state.total_steps);
-
     int64_t n_kv_heads =
         args_ ? args_->n_kv_heads().value_or(args_->n_heads()) : 0;
     int64_t head_dim = args_ ? args_->head_dim() : 0;
@@ -429,24 +527,30 @@ ForwardInput MultiStepBatchInputBuilder::state_to_forward_input() {
         head_dim};
   }
 
+  // Decode sequence lengths
   if (!multi_step_state.decode_seq_lens.empty()) {
     auto tensor_options = torch::TensorOptions()
                               .dtype(torch::kInt)
                               .device(torch::kCPU)
                               .pinned_memory(true);
-    forward_input.input_params.decode_kv_seq_lens =
+    input_params.decode_kv_seq_lens =
         torch::tensor(multi_step_state.decode_seq_lens, tensor_options);
-    forward_input.input_params.decode_q_seq_lens =
+    input_params.decode_q_seq_lens =
         torch::tensor(multi_step_state.decode_q_seq_lens, tensor_options);
-    forward_input.input_params.decode_kv_seq_lens_vec =
-        multi_step_state.decode_seq_lens;
-    forward_input.input_params.decode_q_seq_lens_vec =
-        multi_step_state.decode_q_seq_lens;
+    input_params.decode_kv_seq_lens_vec = multi_step_state.decode_seq_lens;
+    input_params.decode_q_seq_lens_vec = multi_step_state.decode_q_seq_lens;
   }
 
+  // Decode positions
   if (!multi_step_state.decode_positions_vec.empty()) {
     forward_input.decode_positions_vec = multi_step_state.decode_positions_vec;
   }
+
+  // Transfer KV infos
+  // input_params.transfer_kv_infos = std::move(state.transfer_kv_infos);
+
+  // Batch ID
+  input_params.batch_id = batch_id_;
 
   return forward_input;
 }
