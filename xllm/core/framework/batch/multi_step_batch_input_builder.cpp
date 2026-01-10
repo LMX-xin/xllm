@@ -450,7 +450,8 @@ ForwardInput MultiStepBatchInputBuilder::state_to_forward_input() {
       torch::tensor(state.paged_kv_last_page_len, torch::kInt);
 
   // Setup multimodal data
-  input_params.mm_data = MMData::batch(mm_data_vec_);
+  input_params.mm_data.batch(mm_data_vec_);
+  // input_params.mm_data = MMData::batch(mm_data_vec_);
 
   // Setup block tables
   util::pad_2d_vector(state.block_tables_vec, /*pad_value=*/0);
@@ -610,43 +611,6 @@ RawForwardInput MultiStepBatchInputBuilder::state_to_raw_forward_input(
         std::move(src.new_cache_slot_offsets);
     raw_forward_input.kv_cache_start_offsets =
         std::move(src.kv_cache_start_offsets);
-  }
-
-  if (!mm_data_vec_.empty()) {
-    MMData mm_data = MMData::batch(mm_data_vec_);
-    const auto& res = mm_data.get<torch::Tensor>("embedding");
-    if (res && res.value().defined()) {
-      auto push_embedding = [&](torch::Tensor t) {
-        if (!t.defined() || t.numel() == 0) return;
-        t = t.to(torch::kCPU).contiguous().to(torch::kFloat32);
-        std::vector<float> v(static_cast<size_t>(t.numel()));
-        std::memcpy(v.data(), t.data_ptr<float>(), v.size() * sizeof(float));
-        raw_forward_input.embeddings.emplace_back(std::move(v));
-      };
-      if (FLAGS_max_decode_rounds > 0) {
-        torch::Tensor embeddings = res.value();
-        if (embeddings.dim() == 1) {
-          if (embeddings.defined() && embeddings.numel() > 0) {
-            push_embedding(embeddings);
-          }
-        } else if (embeddings.dim() >= 2) {
-          for (int64_t output_idx = 0; output_idx < embeddings.size(0);
-               ++output_idx) {
-            torch::Tensor embedding = embeddings[output_idx];
-            if (!embedding.defined() || embedding.numel() == 0) {
-              continue;
-            }
-            push_embedding(embedding);
-          }
-        }
-      } else {
-        torch::Tensor embeddings = res.value();
-        for (int64_t output_idx = 0; output_idx < embeddings.size(0);
-             ++output_idx) {
-          push_embedding(embeddings[output_idx]);
-        }
-      }
-    }
   }
 
   // Swap blocks (optional). Align with BatchInputBuilder's packing behavior:
