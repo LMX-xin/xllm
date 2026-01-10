@@ -126,7 +126,7 @@ class RecEngine : public Engine {
   };
 
   // ============================================================
-  // PureDeviceEnginePipeline: kLlmPureDevicePipeLine via local Worker
+  // PureDeviceEnginePipeline: kLlmRecPureDevicePipeline via local Worker
   // For multi-round pure device inference (multi-round logic in worker)
   // ============================================================
   class PureDeviceEnginePipeline final : public RecEnginePipeline {

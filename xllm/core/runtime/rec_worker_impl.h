@@ -113,6 +113,39 @@ class RecWorkerImpl : public LLMWorkerImpl {
     RecWorkerImpl& worker_;
   };
 
+  class LlmRecPureDevicePipeline final : public RecWorkPipeline {
+   public:
+    explicit LlmRecPureDevicePipeline(RecWorkerImpl& worker);
+
+    bool create_model(RecWorkerImpl& worker, ModelContext& context) override;
+
+    ForwardInput prepare_inputs(Batch& batch) override;
+
+    void prepare_work_before_execute(const ForwardInput& inputs,
+                                     ForwardInput& processed_inputs) override;
+
+    std::optional<ForwardOutput> step(const ForwardInput& input) override;
+
+   private:
+    std::optional<ForwardOutput> step_multi_round(ForwardInput& input);
+
+    // Update input for next round in multi-round decoding
+    void update_input_for_next_round(
+        ForwardInput& input,
+        int32_t round,
+        const SampleOutput& sample_output,
+        const torch::Tensor& out_token_ids,
+        int32_t batch,
+        int32_t beam_width_init,
+        const std::vector<torch::Tensor>& unshared_k_cache,
+        const std::vector<torch::Tensor>& unshared_v_cache,
+        int64_t num_heads,
+        int64_t num_kv_heads,
+        int64_t head_dim);
+
+    RecWorkerImpl& worker_;
+  };
+
   // Factory method to create pipeline (can access private classes)
   static std::unique_ptr<RecWorkPipeline> create_pipeline(
       RecPipelineType type,

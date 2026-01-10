@@ -62,6 +62,17 @@ struct AttentionMetadata {
   torch::Tensor paged_kv_last_page_len;
   std::shared_ptr<PlanInfo> plan_info;
 
+  // for xattention
+  torch::Tensor full_k_cache;
+  torch::Tensor full_v_cache;
+  uint32_t step;
+
+  // for multi-round decode with shared KV cache
+  torch::Tensor decode_paged_kv_indices;
+  torch::Tensor decode_paged_kv_indptr;
+  torch::Tensor decode_paged_kv_last_page_len;
+  torch::Tensor naive_block_table;
+
   // for npu
   torch::Tensor attn_mask;
   torch::Tensor kv_seq_lens_host;

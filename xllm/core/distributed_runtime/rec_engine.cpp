@@ -882,7 +882,7 @@ std::unique_ptr<RecEngine::RecEnginePipeline> RecEngine::create_pipeline(
   switch (type) {
     case RecPipelineType::kLlmRecDefault:
       return std::make_unique<LlmRecEnginePipeline>(engine);
-    case RecPipelineType::kLlmPureDevicePipeLine:
+    case RecPipelineType::kLlmRecPureDevicePipeline:
       return std::make_unique<PureDeviceEnginePipeline>(engine);
     case RecPipelineType::kOneRecDefault:
       return std::make_unique<OneRecEnginePipeline>(engine);

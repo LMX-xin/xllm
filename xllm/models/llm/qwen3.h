@@ -126,6 +126,14 @@ class QWen3ModelImpl : public LlmModelImplBase<QWen3DecoderLayer> {
 
     std::optional<torch::Tensor> residual;
     for (size_t i = 0; i < layers_.size(); i++) {
+      if (FLAGS_max_decode_rounds) {
+        auto target_layer_full_k_cache = input_params_new.full_k_caches[i];
+        auto target_layer_full_v_cache = input_params_new.full_v_caches[i];
+
+        attn_metadata.full_k_cache = target_layer_full_k_cache;
+        attn_metadata.full_v_cache = target_layer_full_v_cache;
+      }
+
       attn_metadata.plan_info->layer_id = i;
       auto& layer = layers_[i];
       h = layer(h,
