@@ -18,6 +18,8 @@ limitations under the License.
 #include <cstdint>
 #include <string_view>
 
+#include "core/common/global_flags.h"
+
 namespace xllm {
 
 enum class RecModelKind : int8_t {
@@ -38,7 +40,11 @@ enum class RecPipelineType : uint8_t {
 inline RecPipelineType get_rec_pipeline_type(RecModelKind kind) {
   switch (kind) {
     case RecModelKind::kLlmRec:
-      return RecPipelineType::kLlmRecDefault;
+      if (FLAGS_max_decode_rounds > 1) {
+        return RecPipelineType::kLlmRecPureDevicePipeline;
+      } else {
+        return RecPipelineType::kLlmRecDefault;
+      }
     case RecModelKind::kOneRec:
       return RecPipelineType::kOneRecDefault;
     default:

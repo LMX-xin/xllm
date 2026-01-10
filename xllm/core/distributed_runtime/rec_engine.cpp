@@ -82,12 +82,12 @@ bool RecEngine::init_model() {
   args_ = model_loader->model_args();
   quant_args_ = model_loader->quant_args();
   tokenizer_args_ = model_loader->tokenizer_args();
-
+  LOG(INFO) << "after tokenizer";
   // Determine rec model kind and create pipeline via factory
   rec_model_kind_ = get_rec_model_kind(args_.model_type());
   auto pipeline_type = get_rec_pipeline_type(rec_model_kind_);
   pipeline_ = create_pipeline(pipeline_type, *this);
-
+  LOG(INFO) << "after create_pipeline";
   // LlmRec-specific initialization
   if (rec_model_kind_ == RecModelKind::kLlmRec) {
 #if defined(USE_NPU)
@@ -100,7 +100,7 @@ bool RecEngine::init_model() {
         << "REC(kLlmRec) need to set master node addr, "
            "Please set --master_node_addr.";
   }
-
+  LOG(INFO) << "after FLAGS_enable_atb_comm_multiprocess";
   // Pipeline-specific setup
   pipeline_->setup_workers();
   pipeline_->process_group_test();
@@ -108,9 +108,10 @@ bool RecEngine::init_model() {
   if (!threadpool_) {
     threadpool_ = std::make_unique<ThreadPool>(16);
   }
-
+  LOG(INFO) << "after threadpool_";
   // Compute KV cache config (shared logic)
-  const int world_size = static_cast<int>(pipeline_->num_workers());
+  const int world_size = static_cast<int>(options_.devices().size());
+  LOG(INFO) << "world_size: " << world_size;
   const int64_t n_heads = args_.n_heads();
   const int64_t n_kv_heads = args_.n_kv_heads().value_or(n_heads);
   n_local_kv_heads_ = std::max<int64_t>(1, n_kv_heads / world_size);

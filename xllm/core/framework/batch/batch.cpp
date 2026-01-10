@@ -126,22 +126,24 @@ ForwardInput Batch::prepare_rec_forward_input(uint32_t num_decoding_tokens,
                                               uint32_t min_decoding_batch_size,
                                               const ModelArgs& args,
                                               ThreadPool* thread_pool) {
-  RecType rec_type = RecType::kNone;
-  if (!sequence_groups_.empty() && !sequence_groups_[0]->sequences().empty()) {
-    rec_type = sequence_groups_[0]->sequences()[0]->rec_type();
-  }
+  return prepare_multi_step_forward_input_forward(args, thread_pool);
+  // RecType rec_type = RecType::kNone;
+  // if (!sequence_groups_.empty() && !sequence_groups_[0]->sequences().empty())
+  // {
+  //   rec_type = sequence_groups_[0]->sequences()[0]->rec_type();
+  // }
 
-  auto builder = RecBatchInputBuilder::create(rec_type,
-                                              sequence_groups_,
-                                              allowed_max_tokens_,
-                                              input_embeddings_vec_,
-                                              mm_data_vec_,
-                                              swap_block_transfer_infos_,
-                                              batch_id_,
-                                              &args,
-                                              thread_pool);
-  return builder->build_rec_forward_input(num_decoding_tokens,
-                                          min_decoding_batch_size);
+  // auto builder = RecBatchInputBuilder::create(rec_type,
+  //                                             sequence_groups_,
+  //                                             allowed_max_tokens_,
+  //                                             input_embeddings_vec_,
+  //                                             mm_data_vec_,
+  //                                             swap_block_transfer_infos_,
+  //                                             batch_id_,
+  //                                             &args,
+  //                                             thread_pool);
+  // return builder->build_rec_forward_input(num_decoding_tokens,
+  //                                         min_decoding_batch_size);
 }
 
 std::vector<Sequence*> Batch::get_sequences() {
