@@ -279,26 +279,6 @@ void MultiStepBatchInputBuilder::extract_tokens_and_positions(
 
   // begin process decode data
   seq_len = n_kv_cache_tokens + 1;
-  // std::unordered_map<int32_t, int32_t> adjusted_token_to_count_map;
-  // 从第一个 decode 到 max_decode round 都生成采样参数，
-  // 都采用prompt最后一个token做占位，实际上这些需要执行 beam_width 次
-  // 应当在 worker 上再broadcast
-  // uint32_t pos_idx = n_kv_cache_tokens;
-  // adjusted_token_to_count_map[token_ids[pos_idx - 1]] = 1;
-  // TODO_1111 不考虑 use_mrope_ 为true 的情况
-  // 是对 sequence 循环调的这个，所以每个sequence 内容理论上不一样，但是prefill
-  // 阶段只有一个 sequnece 所以在worker 侧需要替换或broadcast.
-  // state_ptr->flatten_tokens_vec.push_back(token_ids[pos_idx - 1]);
-  // state_ptr->flatten_positions_vec.push_back(static_cast<int32_t>(pos_idx));
-  // 不需要执行 handle_sampling_parameters 直接填充
-  // handle_sampling_parameters(
-  //     sequence, pos_idx, seq_len, adjusted_token_to_count_map, state_ptr);
-  // state_ptr->extra_token_ids.push_back(-1);
-  // state_ptr->embedding_ids.push_back(sequence->get_embedding_id());
-  // 用于sample，每次都一样
-  // 以下需要配套构造 sample_params ，在param_utils.cpp 中
-  // proto_to_forward_input 中使用 因为每个 request 的 每个 sequence
-  // 都一样，所以decode 可以只传一份，在 worker 端进行broadcast.
   uint32_t prompt_len = sequence->num_prompt_tokens();
   state_ptr->decode_positions_vec.push_back(static_cast<int32_t>(prompt_len));
 

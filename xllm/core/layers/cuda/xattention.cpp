@@ -117,7 +117,8 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> XAttentionImpl::forward(
                 .contiguous();
     int32_t full_kv_len = full_k_cache.size(0);
     int32_t unshared_offset = batch_size * FLAGS_max_token_per_req;
-    int32_t max_decode_step = k_cache.size(2);
+    // int32_t max_decode_step = k_cache.size(2);
+    int32_t max_decode_step = FLAGS_max_decode_rounds - 1;
     // LOG(INFO) << "full_kv_len: " << full_kv_len;
     // LOG(INFO) << "unshared_offset: " << unshared_offset;
     auto unshared_k_cache = full_k_cache.slice(0, unshared_offset, full_kv_len);
