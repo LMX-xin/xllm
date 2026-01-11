@@ -140,6 +140,32 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> XAttentionImpl::forward(
     LOG(INFO) << "after decoder_reshape_and_cache";
     full_k_cache = full_k_cache.unsqueeze(1);
     full_v_cache = full_v_cache.unsqueeze(1);
+    LOG(INFO) << "full_k_cache.shape: " << full_k_cache.sizes();
+    LOG(INFO) << "full_v_cache.shape: " << full_v_cache.sizes();
+    // maybe we need to update shared attn state before execute attention,
+    // currently we update flashinfer step_wise_attn_state_ at layer 0.
+    LOG(INFO) << "attn_metadata.is_prefill: " << attn_metadata.is_prefill;
+    bool causal = true;
+    flashinfer::update_plan_info(
+        attn_metadata.plan_info,
+        causal ? xllm::kernel::cuda::determine_attention_backend(
+                     /*pos_encoding_mode=*/0,
+                     /*use_fp16_qk_reduction=*/false,
+                     /*use_custom_mask=*/false)
+               : "fa2",
+        attn_metadata,
+        query.scalar_type(),
+        key.scalar_type(),
+        output.scalar_type(),
+        head_size_,
+        head_size_,
+        num_heads_,
+        num_kv_heads_,
+        /*block_size*/ full_k_cache.size(1),
+        /*window_size_left*/ sliding_window_,
+        /*enable_cuda_graph*/ false,
+        /*causal*/ false,
+        /*use_tensor_core*/ false);
 
     xllm::kernel::AttentionParams attention_params;
     auto unshared_lse = std::nullopt;
@@ -173,11 +199,17 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> XAttentionImpl::forward(
     attention_params.paged_kv_indptr = attn_metadata.decode_paged_kv_indptr;
     attention_params.paged_kv_last_page_len =
         attn_metadata.decode_paged_kv_last_page_len;
-
+    LOG(INFO) << "attn_metadata.decode_paged_kv_indices: "
+              << attn_metadata.decode_paged_kv_indices;
+    LOG(INFO) << "attn_metadata.decode_paged_kv_indptr: "
+              << attn_metadata.decode_paged_kv_indptr;
+    LOG(INFO) << "attn_metadata.decode_paged_kv_last_page_len: "
+              << attn_metadata.decode_paged_kv_last_page_len;
     // attention_params.plan_info = attn_metadata.decode_plan_info;
     attention_params.uri = attn_metadata.plan_info->uri;
     attention_params.plan_info = attn_metadata.plan_info->plan_info;
-
+    // LOG(INFO) << "attention_params.uri: " << attention_params.uri;
+    attention_params.use_tensor_core = false;
     xllm::kernel::batch_decode(attention_params);
     LOG(INFO) << "after batch_decode";
   }
