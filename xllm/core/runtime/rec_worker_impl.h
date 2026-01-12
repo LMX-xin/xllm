@@ -130,18 +130,13 @@ class RecWorkerImpl : public LLMWorkerImpl {
     std::optional<ForwardOutput> step_multi_round(ForwardInput& input);
 
     // Update input for next round in multi-round decoding
-    void update_input_for_next_round(
-        ForwardInput& input,
-        int32_t round,
-        const SampleOutput& sample_output,
-        const torch::Tensor& out_token_ids,
-        int32_t batch,
-        int32_t beam_width_init,
-        const std::vector<torch::Tensor>& unshared_k_cache,
-        const std::vector<torch::Tensor>& unshared_v_cache,
-        int64_t num_heads,
-        int64_t num_kv_heads,
-        int64_t head_dim);
+    void update_input_for_next_round(ForwardInput& input,
+                                     int32_t current_step,
+                                     const SampleOutput& sample_output,
+                                     const torch::Tensor& out_token_ids,
+                                     int32_t batch_size,
+                                     int32_t beam_size,
+                                     int32_t max_decode_step);
 
     RecWorkerImpl& worker_;
   };

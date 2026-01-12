@@ -387,13 +387,6 @@ struct ModelInputParams {
   int32_t kv_max_seq_len = 0;
   int32_t q_max_seq_len = 0;
 
-  // for multi-round decode with shared KV cache
-  // computed once per step in step_multi_round, reused across all layers
-  torch::Tensor decode_paged_kv_indices;  // filtered indices after mask
-  torch::Tensor decode_paged_kv_indptr;   // cumulative indptr
-  torch::Tensor
-      decode_paged_kv_last_page_len;  // last page len for each sequence
-
   uint64_t batch_id;
 
   torch::Tensor q_seq_lens;
@@ -514,6 +507,9 @@ struct ModelInputParams {
   // full kv caches provided by engine for step-level decode, per layer
   std::vector<torch::Tensor> full_k_caches;
   std::vector<torch::Tensor> full_v_caches;
+  std::vector<torch::Tensor> unshared_k_caches;
+  std::vector<torch::Tensor> unshared_v_caches;
+  torch::Tensor naive_block_table;
   torch::Tensor beam_width_tensor;
   torch::Tensor current_round_tensor;
   std::vector<torch::Tensor> current_round_tensor_list;
@@ -525,11 +521,6 @@ struct ModelInputParams {
   int32_t total_round = 0;
   int32_t num_heads = 0;
   int32_t head_dim = 0;
-
-  // Cached plan_info for batch_prefill optimization (reused across layers)
-  // Generated in llm_worker_impl.cpp for prefill mode
-  std::optional<torch::Tensor> prefill_plan_info;
-  std::optional<torch::Tensor> decode_plan_info;
 };
 
 }  // namespace xllm
