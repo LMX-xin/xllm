@@ -1,0 +1,266 @@
+name: Cursor Agent (poll upstream PR comments)
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_repo:
+        description: "Upstream repo in owner/name format (optional; falls back to repo variable UPSTREAM_REPO)"
+        required: false
+        default: ""
+      pr_number:
+        description: "Only process a specific upstream PR number (optional)"
+        required: false
+        default: ""
+      confirm_write:
+        description: "Allow commit/push changes back to your fork branch"
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: "If true, only detect @cursor comment and report it (no code changes)"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cursor-upstream-poll
+  cancel-in-progress: false
+
+env:
+  # Recommended: set repo variable UPSTREAM_REPO in your fork repo:
+  # Settings -> Secrets and variables -> Actions -> Variables -> New repository variable
+  # Example: UPSTREAM_REPO=org/main-repo
+  UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO }}
+
+jobs:
+  poll_and_fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.dry_run }}" != "true" ] && [ "${{ inputs.confirm_write }}" != "true" ]; then
+            echo "Refusing to run with dry_run=false unless confirm_write=true."
+            echo "Set confirm_write=true to allow commit/push, or keep dry_run=true to only report."
+            exit 1
+          fi
+
+      - name: Pick an unprocessed @cursor comment from upstream PRs
+        id: pick
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          upstream_repo_input="${{ inputs.upstream_repo }}"
+          upstream_repo="${UPSTREAM_REPO}"
+          if [ -n "${upstream_repo_input}" ]; then
+            upstream_repo="${upstream_repo_input}"
+          fi
+          if [ -z "${upstream_repo}" ]; then
+            echo "UPSTREAM_REPO is empty. Set repo variable UPSTREAM_REPO or pass workflow_dispatch input upstream_repo."
+            exit 1
+          fi
+
+          fork_repo="${GITHUB_REPOSITORY}"
+          owner_login="${GITHUB_REPOSITORY_OWNER}"
+
+          pr_number_input="${{ inputs.pr_number }}"
+          if [ -n "${pr_number_input}" ]; then
+            prs="$(printf "%s\n" "${pr_number_input}")"
+          else
+            prs="$(gh api "repos/${upstream_repo}/pulls?state=open&per_page=100" --paginate \
+              --jq ".[] | select(.head.repo.full_name==\"${fork_repo}\") | .number")"
+          fi
+
+          found="false"
+          pr_number=""
+          head_ref=""
+          comment_id=""
+          prompt=""
+          pr_url=""
+
+          while IFS= read -r pr; do
+            [ -z "${pr}" ] && continue
+
+            pr_json="$(gh api "repos/${upstream_repo}/pulls/${pr}")"
+            head_ref_candidate="$(printf "%s" "${pr_json}" | jq -r '.head.ref')"
+            pr_url_candidate="$(printf "%s" "${pr_json}" | jq -r '.html_url')"
+
+            comments_json="$(gh api "repos/${upstream_repo}/issues/${pr}/comments?per_page=100" --paginate)"
+
+            processed_ids_json="$(printf "%s" "${comments_json}" | jq -r '
+              [ .[]
+                | select(.body | test("cursor-agent-processed:[0-9]+"))
+                | (.body | capture("cursor-agent-processed:(?<id>[0-9]+)") | .id | tonumber)
+              ] | unique
+            ')"
+
+            candidate_json="$(printf "%s" "${comments_json}" | jq -c \
+              --arg owner "${owner_login}" \
+              --argjson processed "${processed_ids_json}" '
+                [ .[]
+                  | select(.user.login == $owner)
+                  | select(.body | test("@cursor"))
+                  | { id: (.id | tonumber), body: .body, created_at: .created_at }
+                ]
+                | sort_by(.created_at) | reverse
+                | map(select((.id as $id | ($processed | index($id)) | not)))
+                | .[0] // empty
+              ')"
+
+            if [ -z "${candidate_json}" ]; then
+              continue
+            fi
+
+            comment_id_candidate="$(printf "%s" "${candidate_json}" | jq -r '.id')"
+            body_candidate="$(printf "%s" "${candidate_json}" | jq -r '.body')"
+            prompt_candidate="$(printf "%s" "${body_candidate}" | sed -n 's/^[[:space:]]*@cursor[[:space:]]\+//p' | head -n 1)"
+
+            if [ -z "${prompt_candidate}" ]; then
+              # Mark it as processed to avoid infinite loops on malformed command.
+              pr_number="${pr}"
+              head_ref="${head_ref_candidate}"
+              comment_id="${comment_id_candidate}"
+              pr_url="${pr_url_candidate}"
+              prompt="__EMPTY__"
+              found="true"
+              break
+            fi
+
+            pr_number="${pr}"
+            head_ref="${head_ref_candidate}"
+            comment_id="${comment_id_candidate}"
+            pr_url="${pr_url_candidate}"
+            prompt="${prompt_candidate}"
+            found="true"
+            break
+          done <<< "${prs}"
+
+          echo "found=${found}" >> "${GITHUB_OUTPUT}"
+          echo "upstream_repo=${upstream_repo}" >> "${GITHUB_OUTPUT}"
+          echo "pr_number=${pr_number}" >> "${GITHUB_OUTPUT}"
+          echo "head_ref=${head_ref}" >> "${GITHUB_OUTPUT}"
+          echo "comment_id=${comment_id}" >> "${GITHUB_OUTPUT}"
+          echo "pr_url=${pr_url}" >> "${GITHUB_OUTPUT}"
+          printf "prompt<<EOF\n%s\nEOF\n" "${prompt}" >> "${GITHUB_OUTPUT}"
+
+      - name: No work found
+        if: steps.pick.outputs.found != 'true'
+        run: |
+          echo "No unprocessed @cursor comment found in upstream PRs."
+
+      - name: Dry-run summary (no upstream comment, no changes)
+        if: steps.pick.outputs.found == 'true' && inputs.dry_run == true
+        run: |
+          echo "Detected @cursor command (dry-run mode)."
+          echo "Upstream repo: ${{ steps.pick.outputs.upstream_repo }}"
+          echo "Upstream PR:   ${{ steps.pick.outputs.pr_url }}"
+          echo "Fork branch:   ${{ steps.pick.outputs.head_ref }}"
+          echo "Prompt:        ${{ steps.pick.outputs.prompt }}"
+          {
+            echo "## Cursor Agent dry-run"
+            echo ""
+            echo "- Upstream repo: \`${{ steps.pick.outputs.upstream_repo }}\`"
+            echo "- Upstream PR: ${{ steps.pick.outputs.pr_url }}"
+            echo "- Fork branch: \`${{ steps.pick.outputs.head_ref }}\`"
+            echo "- Prompt: \`${{ steps.pick.outputs.prompt }}\`"
+            echo ""
+            echo "To execute and push changes, re-run with:"
+            echo "- \`dry_run=false\`"
+            echo "- \`confirm_write=true\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Checkout fork PR branch
+        if: steps.pick.outputs.found == 'true' && inputs.dry_run != true && inputs.confirm_write == true
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pick.outputs.head_ref }}
+          fetch-depth: 0
+
+      - name: Configure git identity
+        if: steps.pick.outputs.found == 'true' && inputs.dry_run != true && inputs.confirm_write == true
+        run: |
+          git config user.name "cursor-agent"
+          git config user.email "cursor-agent@users.noreply.github.com"
+
+      - name: Install Cursor CLI
+        if: steps.pick.outputs.found == 'true' && inputs.dry_run != true && inputs.confirm_write == true
+        run: |
+          curl -fsSL https://cursor.com/install | bash
+          echo "$HOME/.cursor/bin" >> $GITHUB_PATH
+
+      - name: Run Cursor Agent
+        if: steps.pick.outputs.found == 'true' && inputs.dry_run != true && inputs.confirm_write == true
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.pick.outputs.prompt }}" = "__EMPTY__" ]; then
+            echo "Empty prompt after @cursor; skipping code changes."
+            exit 0
+          fi
+          cursor-agent -p "${{ steps.pick.outputs.prompt }}"
+
+      - name: Commit & push if changed
+        if: steps.pick.outputs.found == 'true' && inputs.dry_run != true && inputs.confirm_write == true
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+            echo "commit_sha=" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          git commit -m "fix: cursor agent changes
+
+          Prompt: ${{ steps.pick.outputs.prompt }}"
+          git push origin "HEAD:${{ steps.pick.outputs.head_ref }}"
+          echo "changed=true" >> "${GITHUB_OUTPUT}"
+          echo "commit_sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+
+      - name: Comment back on upstream PR (mark processed)
+        if: steps.pick.outputs.found == 'true' && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          upstream_repo="${{ steps.pick.outputs.upstream_repo }}"
+          pr_number="${{ steps.pick.outputs.pr_number }}"
+          head_ref="${{ steps.pick.outputs.head_ref }}"
+          comment_id="${{ steps.pick.outputs.comment_id }}"
+          pr_url="${{ steps.pick.outputs.pr_url }}"
+          prompt="${{ steps.pick.outputs.prompt }}"
+          changed="${{ steps.commit.outputs.changed }}"
+          commit_sha="${{ steps.commit.outputs.commit_sha }}"
+
+          if [ "${prompt}" = "__EMPTY__" ]; then
+            status_line="⚠️ 指令格式不正确：`@cursor` 后面没有 prompt（已标记为 processed）"
+          elif [ "${changed}" = "true" ]; then
+            status_line="✅ 已运行 Cursor Agent 并推送提交到 fork 分支 \`${head_ref}\`（commit: \`${commit_sha}\`）"
+          else
+            status_line="ℹ️ 已运行 Cursor Agent，但没有产生代码改动（已标记为 processed）"
+          fi
+
+          body="$(cat <<EOF
+${status_line}
+
+**Upstream PR**: ${pr_url}
+**Fork branch**: \`${head_ref}\`
+**Prompt**: \`${prompt}\`
+
+<!-- cursor-agent-processed:${comment_id} -->
+EOF
+)"
+
+          gh api "repos/${upstream_repo}/issues/${pr_number}/comments" -f body="${body}"
+

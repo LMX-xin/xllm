@@ -1,0 +1,90 @@
+name: Cursor Agent (comment-triggered)
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  run_cursor_agent:
+    # 仅当是 PR 评论 + 包含 @cursor 才触发
+    if: |
+      github.event.issue.pull_request != null &&
+      contains(github.event.comment.body, '@cursor')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Gate (only repo owner can trigger)
+        # 你也可以改成白名单/组织成员判断；这里先给最安全的：只允许仓库 owner 触发
+        run: |
+          if [ "${{ github.event.comment.user.login }}" != "${{ github.repository_owner }}" ]; then
+            echo "Not allowed user: ${{ github.event.comment.user.login }}"
+            exit 1
+          fi
+
+      - name: Get PR info (head ref)
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER="${{ github.event.issue.number }}"
+          HEAD_REF="$(gh api repos/${{ github.repository }}/pulls/${PR_NUMBER} --jq .head.ref)"
+          echo "head_ref=${HEAD_REF}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.head_ref }}
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "cursor-agent"
+          git config user.email "cursor-agent@users.noreply.github.com"
+
+      - name: Extract prompt from comment
+        id: prompt
+        shell: bash
+        run: |
+          BODY="${{ github.event.comment.body }}"
+          PROMPT="$(printf "%s" "$BODY" | sed -n 's/^[[:space:]]*@cursor[[:space:]]\+//p' | head -n 1)"
+          if [ -z "$PROMPT" ]; then
+            echo "No prompt found after @cursor"
+            exit 1
+          fi
+          echo "text=${PROMPT}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Cursor CLI
+        run: |
+          curl -fsSL https://cursor.com/install | bash
+          echo "$HOME/.cursor/bin" >> $GITHUB_PATH
+
+      - name: Run Cursor Agent
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          cursor-agent -p "${{ steps.prompt.outputs.text }}"
+
+      - name: Commit & push if changed
+        run: |
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes"
+            exit 0
+          fi
+          git commit -m "fix: cursor agent changes
+
+          Prompt: ${{ steps.prompt.outputs.text }}"
+          git push origin "HEAD:${{ steps.pr.outputs.head_ref }}"
+
+      - name: Comment back
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments \
+            -f body="✅ 已按评论触发运行 Cursor Agent，并尝试推送修复到分支 \`${{ steps.pr.outputs.head_ref }}\`。
+**Prompt**: \`${{ steps.prompt.outputs.text }}\`"
