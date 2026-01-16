@@ -17,6 +17,8 @@ limitations under the License.
 
 #include <torch/torch.h>
 
+#include <optional>
+
 #include "framework/model/model_input_params.h"
 
 namespace xllm {
@@ -26,6 +28,29 @@ struct PlanInfo {
   int32_t layer_id = -1;
   torch::Tensor plan_info;
   std::string uri;
+};
+
+// for xattention two-stage decode cache (initialized at layer 0 only)
+struct TwoStageDecodeCache {
+  // Output tensors (shape fixed, values computed per layer)
+  torch::Tensor shared_lse;  // [batch_size, beam_size, num_heads_, 1]
+  torch::Tensor shared_o;    // [batch_size, beam_size, num_heads_, head_size_]
+  torch::Tensor unshared_lse;  // [total_beam, num_heads_, 1]
+  torch::Tensor unshared_o;    // [total_beam, num_heads_, head_size_]
+
+  // Fixed tensors (values don't change)
+  torch::Tensor q_cu_seq_lens_shared;       // [batch_size + 1]
+  torch::Tensor paged_kv_indptr_expanded;   // [batch_size * beam_size + 1]
+  torch::Tensor paged_kv_indices_expanded;  // [batch_size * beam_size]
+  torch::Tensor paged_kv_last_page_len_expanded;  // [batch_size * beam_size]
+                                                  // (value updated per layer)
+
+  // Cached parameters for validation
+  int32_t cached_batch_size = -1;
+  int32_t cached_beam_size = -1;
+  int32_t cached_num_heads = -1;
+  int32_t cached_head_size = -1;
+  int32_t real_shared_kv_len = -1;
 };
 
 struct AttentionMetadata {
@@ -61,6 +86,7 @@ struct AttentionMetadata {
   torch::Tensor paged_kv_indices;
   torch::Tensor paged_kv_last_page_len;
   std::shared_ptr<PlanInfo> plan_info;
+  std::shared_ptr<PlanInfo> unshared_plan_info;
 
   // for xattention
   torch::Tensor full_k_cache;
@@ -69,6 +95,9 @@ struct AttentionMetadata {
   torch::Tensor unshared_v_cache;
   torch::Tensor naive_block_table;
   uint32_t step;
+
+  // for xattention two-stage decode cache (layer 0 only)
+  std::optional<TwoStageDecodeCache> two_stage_decode_cache;
 
   // for npu
   torch::Tensor attn_mask;

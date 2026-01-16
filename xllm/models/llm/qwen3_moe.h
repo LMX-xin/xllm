@@ -205,6 +205,7 @@ class Qwen3MoeModelImpl : public LlmModelImplBase<Qwen3MoeDecoderLayer> {
             modified_input_params.unshared_v_caches[i];
       }
       attn_metadata.plan_info->layer_id = i;
+      attn_metadata.unshared_plan_info->layer_id = i;
       auto& layer = layers_[i];
       h = layer(h,
                 residual,
