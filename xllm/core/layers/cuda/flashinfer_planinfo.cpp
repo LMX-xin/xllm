@@ -178,6 +178,77 @@ void update_plan_info(std::shared_ptr<PlanInfo> plan_info,
   }
 }
 
+void initialize_two_stage_decode_cache(AttentionMetadata& attn_metadata,
+                                       const torch::Tensor& query,
+                                       uint32_t batch_size,
+                                       uint32_t beam_size,
+                                       uint32_t total_beam,
+                                       int32_t num_heads,
+                                       int32_t head_size) {
+  bool is_layer_0 = (attn_metadata.plan_info->layer_id == 0);
+
+  if (is_layer_0) {
+    bool need_init =
+        !attn_metadata.two_stage_decode_cache.has_value() ||
+        attn_metadata.two_stage_decode_cache->cached_batch_size !=
+            static_cast<int32_t>(batch_size) ||
+        attn_metadata.two_stage_decode_cache->cached_beam_size !=
+            static_cast<int32_t>(beam_size) ||
+        attn_metadata.two_stage_decode_cache->cached_num_heads != num_heads ||
+        attn_metadata.two_stage_decode_cache->cached_head_size != head_size;
+
+    if (need_init) {
+      TwoStageDecodeCache cache;
+
+      auto fp32_options =
+          torch::TensorOptions().dtype(torch::kFloat32).device(query.device());
+
+      cache.shared_lse =
+          torch::zeros({batch_size * beam_size, num_heads, 1}, fp32_options);
+      cache.shared_o = torch::zeros(
+          {batch_size * beam_size, num_heads, head_size}, query.options());
+      cache.unshared_lse =
+          torch::zeros({total_beam, num_heads, 1}, fp32_options);
+      cache.unshared_o =
+          torch::zeros({total_beam, num_heads, head_size}, query.options());
+
+      cache.q_cu_seq_lens_shared = torch::arange(
+          0,
+          (batch_size + 1) * beam_size,
+          beam_size,
+          torch::TensorOptions().dtype(torch::kInt32).device(query.device()));
+
+      cache.paged_kv_indptr_expanded = torch::arange(
+          batch_size * beam_size + 1, attn_metadata.paged_kv_indptr.options());
+
+      cache.paged_kv_last_page_len_expanded =
+          torch::full({batch_size * beam_size},
+                      0,
+                      attn_metadata.paged_kv_last_page_len.options());
+      cache.paged_kv_last_page_len_expanded.fill_(attn_metadata.step + 1);
+
+      // paged_kv_indices 的计算
+      auto batch_offsets =
+          torch::zeros({batch_size}, attn_metadata.paged_kv_indices.options());
+      batch_offsets = batch_offsets.unsqueeze(1).expand({-1, beam_size});
+      auto beam_offsets =
+          torch::arange(beam_size, attn_metadata.paged_kv_indices.options());
+      auto batch_beam_offsets = batch_offsets * beam_size + beam_offsets;
+      cache.paged_kv_indices_expanded = batch_beam_offsets.flatten();
+
+      cache.cached_batch_size = static_cast<int32_t>(batch_size);
+      cache.cached_beam_size = static_cast<int32_t>(beam_size);
+      cache.cached_num_heads = num_heads;
+      cache.cached_head_size = head_size;
+      auto max_val = attn_metadata.kv_cu_seq_lens.max();
+      int32_t shared_kv_len = max_val.item().toInt();
+      int32_t real_shared_kv_len = shared_kv_len * batch_size;
+      cache.real_shared_kv_len = real_shared_kv_len;
+      attn_metadata.two_stage_decode_cache = cache;
+    }
+  }
+}
+
 }  // namespace flashinfer
 }  // namespace layer
 }  // namespace xllm

@@ -37,6 +37,14 @@ void update_plan_info(std::shared_ptr<PlanInfo> plan_info,
                       bool causal,
                       bool use_tensor_core);
 
+void initialize_two_stage_decode_cache(AttentionMetadata& attn_metadata,
+                                       const torch::Tensor& query,
+                                       uint32_t batch_size,
+                                       uint32_t beam_size,
+                                       uint32_t total_beam,
+                                       int32_t num_heads,
+                                       int32_t head_size);
+
 }  // namespace flashinfer
 }  // namespace layer
 }  // namespace xllm

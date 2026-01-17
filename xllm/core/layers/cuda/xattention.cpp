@@ -128,96 +128,22 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> XAttentionImpl::forward(
         attn_metadata.step);
 
     if (FLAGS_enable_xattention_two_stage_decode) {
-      // 判断是否在第一层
-      bool is_layer_0 = (attn_metadata.plan_info->layer_id == 0);
+      flashinfer::initialize_two_stage_decode_cache(
+          const_cast<AttentionMetadata&>(attn_metadata),
+          query,
+          batch_size,
+          beam_size,
+          total_beam,
+          num_heads_,
+          head_size_);
 
-      // 初始化或复用缓存（只在第一层初始化）
-      if (is_layer_0) {
-        // 检查是否需要重新初始化（参数变化）
-        bool need_init =
-            !attn_metadata.two_stage_decode_cache.has_value() ||
-            attn_metadata.two_stage_decode_cache->cached_batch_size !=
-                static_cast<int32_t>(batch_size) ||
-            attn_metadata.two_stage_decode_cache->cached_beam_size !=
-                static_cast<int32_t>(beam_size) ||
-            attn_metadata.two_stage_decode_cache->cached_num_heads !=
-                num_heads_ ||
-            attn_metadata.two_stage_decode_cache->cached_head_size !=
-                head_size_;
-
-        if (need_init) {
-          TwoStageDecodeCache cache;
-
-          auto fp32_options = torch::TensorOptions()
-                                  .dtype(torch::kFloat32)
-                                  .device(query.device());
-
-          // 初始化输出 tensors (3D shape for batch_prefill)
-          cache.shared_lse = torch::zeros(
-              {batch_size * beam_size, num_heads_, 1}, fp32_options);
-          cache.shared_o =
-              torch::zeros({batch_size * beam_size, num_heads_, head_size_},
-                           query.options());
-          cache.unshared_lse =
-              torch::zeros({total_beam, num_heads_, 1}, fp32_options);
-          cache.unshared_o = torch::zeros({total_beam, num_heads_, head_size_},
-                                          query.options());
-
-          // 初始化固定 tensors
-          cache.q_cu_seq_lens_shared =
-              torch::arange(0,
-                            (batch_size + 1) * beam_size,
-                            beam_size,
-                            torch::TensorOptions()
-                                .dtype(torch::kInt32)
-                                .device(query.device()));
-
-          cache.paged_kv_indptr_expanded =
-              torch::arange(batch_size * beam_size + 1,
-                            attn_metadata.paged_kv_indptr.options());
-
-          cache.paged_kv_last_page_len_expanded =
-              torch::full({batch_size * beam_size},
-                          0,
-                          attn_metadata.paged_kv_last_page_len.options());
-          cache.paged_kv_last_page_len_expanded.fill_(attn_metadata.step + 1);
-
-          // paged_kv_indices 的计算
-          auto batch_offsets = torch::zeros(
-              {batch_size}, attn_metadata.paged_kv_indices.options());
-          batch_offsets = batch_offsets.unsqueeze(1).expand({-1, beam_size});
-          auto beam_offsets = torch::arange(
-              beam_size, attn_metadata.paged_kv_indices.options());
-          auto batch_beam_offsets = batch_offsets * beam_size + beam_offsets;
-          cache.paged_kv_indices_expanded = batch_beam_offsets.flatten();
-
-          // 缓存参数
-          cache.cached_batch_size = static_cast<int32_t>(batch_size);
-          cache.cached_beam_size = static_cast<int32_t>(beam_size);
-          cache.cached_num_heads = num_heads_;
-          cache.cached_head_size = head_size_;
-          auto max_val = attn_metadata.kv_cu_seq_lens.max();
-          int32_t shared_kv_len = max_val.item().toInt();
-          int32_t real_shared_kv_len = shared_kv_len * batch_size;
-          cache.real_shared_kv_len = real_shared_kv_len;
-          // Use const_cast to modify mutable cache in const attn_metadata
-          const_cast<AttentionMetadata&>(attn_metadata).two_stage_decode_cache =
-              cache;
-        }
-      }
-
-      // 获取缓存的 tensor
       auto& cache = attn_metadata.two_stage_decode_cache.value();
-
-      // 更新 paged_kv_last_page_len 的值（不重新创建 tensor）
 
       torch::Tensor shared_k_cache =
           attn_metadata.full_k_cache.slice(0, 0, cache.real_shared_kv_len);
       torch::Tensor shared_v_cache =
           attn_metadata.full_v_cache.slice(0, 0, cache.real_shared_kv_len);
 
-      // Step 2: Prepare query (不需要 clone，直接使用 view)
-      // shared_q 和 query 的数据相同，只是 shape 不同
       auto shared_q =
           query.view({batch_size * beam_size, num_heads_, head_size_});
 
