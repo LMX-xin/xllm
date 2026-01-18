@@ -253,14 +253,11 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> XAttentionImpl::forward(
       shared_attention_params.window_size_left = sliding_window_;
       shared_attention_params.scale = scale_;
       shared_attention_params.float_workspace_buffer =
-          ::xllm::layer::flashinfer::FlashinferWorkspace::get_instance()
-              .get_float_workspace_buffer();
+          attn_metadata.float_workspace_buffer;
       shared_attention_params.int_workspace_buffer =
-          ::xllm::layer::flashinfer::FlashinferWorkspace::get_instance()
-              .get_int_workspace_buffer();
+          attn_metadata.int_workspace_buffer;
       shared_attention_params.page_locked_int_workspace_buffer =
-          ::xllm::layer::flashinfer::FlashinferWorkspace::get_instance()
-              .get_page_locked_int_workspace_buffer();
+          attn_metadata.page_locked_int_workspace_buffer;
       shared_attention_params.key = shared_k_cache;
       shared_attention_params.value = shared_v_cache;
 
@@ -324,14 +321,11 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> XAttentionImpl::forward(
       unshared_attention_params.window_size_left = sliding_window_;
       unshared_attention_params.scale = scale_;
       unshared_attention_params.float_workspace_buffer =
-          ::xllm::layer::flashinfer::FlashinferWorkspace::get_instance()
-              .get_float_workspace_buffer();
+          unshared_attn_meta.float_workspace_buffer;
       unshared_attention_params.int_workspace_buffer =
-          ::xllm::layer::flashinfer::FlashinferWorkspace::get_instance()
-              .get_int_workspace_buffer();
+          unshared_attn_meta.int_workspace_buffer;
       unshared_attention_params.page_locked_int_workspace_buffer =
-          ::xllm::layer::flashinfer::FlashinferWorkspace::get_instance()
-              .get_page_locked_int_workspace_buffer();
+          unshared_attn_meta.page_locked_int_workspace_buffer;
       unshared_attention_params.k_cache = unshared_k;
       unshared_attention_params.v_cache = unshared_v;
 
