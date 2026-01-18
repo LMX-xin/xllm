@@ -257,7 +257,7 @@ class CudaGraphExecutorImpl : public ExecutorImpl {
   runtime::Options options_;
 
   // Lazy-loaded CUDA graphs for different num_tokens
-  absl::flat_hash_map<uint32_t, std::unique_ptr<CudaGraph>> graphs_;
+  absl::flat_hash_map<uint64_t, std::unique_ptr<CudaGraph>> graphs_;
 
   // Persistent parameters shared across all CudaGraph instances
   std::unique_ptr<CudaGraphPersistentParam> persistent_param_;
@@ -269,6 +269,10 @@ class CudaGraphExecutorImpl : public ExecutorImpl {
   // For num_tokens < 8: use 1, 2, 4, 8
   // For num_tokens >= 8: use multiples of 8
   uint32_t get_bucket_num_tokens(uint32_t num_tokens) const;
+
+  // Compose graph cache key from bucket size and step-level decode metadata.
+  uint64_t make_graph_key(uint32_t bucket_num_tokens,
+                          const ModelInputParams& params) const;
 };
 REGISTER_EXECUTOR("cuda", CudaGraphExecutorImpl);
 }  // namespace xllm
