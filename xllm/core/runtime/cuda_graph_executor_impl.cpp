@@ -20,6 +20,7 @@ limitations under the License.
 #include <glog/logging.h>
 #include <torch/torch.h>
 
+#include <algorithm>
 #include <numeric>
 
 #include "core/common/global_flags.h"
@@ -136,6 +137,8 @@ std::optional<ModelInputParams> CudaGraphPersistentParam::update(
 
   const uint32_t actual_num_tokens = tokens.size(0);
   const int64_t actual_batch_size = params.paged_kv_last_page_len.numel();
+  const int64_t request_batch_size =
+      params.kv_seq_lens.defined() ? (params.kv_seq_lens.numel() - 1) : 0;
 
   // Copy data from input parameters to persistent graph tensors
   VLOG(kGraphExecutorLogVerboseLevel)
@@ -168,6 +171,31 @@ std::optional<ModelInputParams> CudaGraphPersistentParam::update(
     persistent_new_cache_slots_
         .slice(/*dim=*/0, /*start=*/0, /*end=*/actual_num_tokens)
         .copy_(params.new_cache_slots, /*non_blocking=*/true);
+  }
+
+  // Persist q/kv cu_seq_lens so CUDA graph replay can see updated values.
+  // NOTE: In step-level (PureDevice) decode, the number of tokens can be
+  // batch_size * beam_width, while q/kv cu_seq_lens are per-request (size
+  // request_batch_size + 1).
+  if (params.q_seq_lens.defined() && params.q_seq_lens.numel() > 0 &&
+      request_batch_size > 0) {
+    q_seq_lens_
+        .slice(/*dim=*/0,
+               /*start=*/0,
+               /*end=*/request_batch_size + 1)
+        .copy_(params.q_seq_lens, /*non_blocking=*/true);
+    attn_metadata->q_cu_seq_lens = q_seq_lens_.slice(
+        /*dim=*/0, /*start=*/0, /*end=*/request_batch_size + 1);
+  }
+  if (params.kv_seq_lens.defined() && params.kv_seq_lens.numel() > 0 &&
+      request_batch_size > 0) {
+    kv_seq_lens_
+        .slice(/*dim=*/0,
+               /*start=*/0,
+               /*end=*/request_batch_size + 1)
+        .copy_(params.kv_seq_lens, /*non_blocking=*/true);
+    attn_metadata->kv_cu_seq_lens = kv_seq_lens_.slice(
+        /*dim=*/0, /*start=*/0, /*end=*/request_batch_size + 1);
   }
 
   // Copy block table data
@@ -249,17 +277,23 @@ std::optional<ModelInputParams> CudaGraphPersistentParam::update(
              /*end=*/actual_batch_size)
       .copy_(params.paged_kv_last_page_len, /*non_blocking=*/true);
 
-  // Convert cumulative lengths to individual sequence lengths using torch::diff
-  // This matches the behavior in attention_metadata_builder.cpp for decode mode
-  attn_metadata->kv_seq_lens =
-      torch::diff(kv_seq_lens(/*actual_batch_size=*/actual_batch_size + 1));
+  // Convert cumulative lengths (cu_seq_lens) to per-request lengths.
+  // Note: For step-level (PureDevice) decode, request_batch_size may differ
+  // from actual_batch_size (beam-expanded).
+  if (attn_metadata->kv_cu_seq_lens.defined() &&
+      attn_metadata->kv_cu_seq_lens.numel() > 1) {
+    attn_metadata->kv_seq_lens = torch::diff(attn_metadata->kv_cu_seq_lens);
+  }
   // Set FlashInfer decode parameters (always update, not just for capture)
   // This ensures attn_metadata points to updated persistent buffers for
   // plan_info calculation
   attn_metadata->paged_kv_indptr =
       persistent_paged_kv_indptr(actual_batch_size);
+  // Keep a fixed-size indices buffer so graph replay is not tied to the
+  // indices tensor length captured in the first batch.
+  // Kernel will use paged_kv_indptr[-1] to decide the valid range.
   attn_metadata->paged_kv_indices =
-      persistent_paged_kv_indices(actual_indices_size);
+      persistent_paged_kv_indices(/*actual_size=*/0);
   attn_metadata->paged_kv_last_page_len =
       persistent_paged_kv_last_page_len(actual_batch_size);
   // qo_indptr is q_cu_seq_lens in GPU Model.
@@ -273,10 +307,9 @@ std::optional<ModelInputParams> CudaGraphPersistentParam::update(
   // before updating plan_info, which requires reading from GPU tensors
   torch::cuda::synchronize();
 
-  // Update plan_info if attn_metadata exists and enable_cuda_graph is true
-  // This ensures plan_info is updated before CUDA graph capture/replay
-
-  {
+  // Update plan_info only before capture. Replay does not invoke model forward,
+  // so updating plan_info here has no effect on graph replay.
+  if (return_capture_params) {
     // Get attention parameters from ModelArgs
     const int32_t head_dim = args_.head_dim();
     const int64_t n_heads = args_.n_heads();
@@ -295,40 +328,141 @@ std::optional<ModelInputParams> CudaGraphPersistentParam::update(
     // Get dtype from k_cache
     const auto dtype = k_cache.scalar_type();
 
-    // Determine if causal (prefill mode)
-    // const bool causal =
-    //     attn_metadata->is_prefill || attn_metadata->is_chunked_prefill;
-    constexpr bool causal = false;
+    const bool pure_device_decode = (params.current_round >= 0) &&
+                                    !params.full_k_caches.empty() &&
+                                    !params.unshared_k_caches.empty();
+    const bool enable_two_stage =
+        pure_device_decode && FLAGS_enable_xattention_two_stage_decode;
 
-    // Determine backend
-    // const std::string backend =
-    //     causal ? xllm::kernel::cuda::determine_attention_backend(
-    //                  /*pos_encoding_mode=*/0,
-    //                  /*use_fp16_qk_reduction=*/false,
-    //                  /*use_custom_mask=*/false)
-    //            : "fa2";
-    const static std::string backend = "fa2";
+    if (enable_two_stage) {
+      const int64_t total_beam = static_cast<int64_t>(actual_num_tokens);
+      CHECK_GT(request_batch_size, 0)
+          << "request_batch_size must be > 0 for two-stage xattention";
+      CHECK_EQ(total_beam % request_batch_size, 0)
+          << "total_beam must be divisible by request_batch_size";
+      const int64_t beam_width = total_beam / request_batch_size;
 
-    // Update plan_info
-    // Note: plan_info is only updated at layer 0, so we set layer_id to 0
-    attn_metadata->plan_info->layer_id = 0;
+      // Pre-allocate two-stage decode cache (stable pointers for CUDA graph).
+      layer::TwoStageDecodeCache cache;
+      auto fp32_options =
+          torch::TensorOptions().dtype(torch::kFloat32).device(tokens.device());
+      auto model_options = torch::TensorOptions().dtype(dtype).device(device_);
 
-    layer::flashinfer::update_plan_info(
-        attn_metadata->plan_info,
-        backend,
-        *attn_metadata,
-        dtype,                             // query_dtype
-        dtype,                             // key_dtype
-        dtype,                             // output_dtype
-        head_dim,                          // head_dim_qk
-        head_dim,                          // head_dim_vo
-        static_cast<int32_t>(n_heads),     // num_qo_heads
-        static_cast<int32_t>(n_kv_heads),  // num_kv_heads
-        static_cast<int32_t>(block_size),  // block_size
-        sliding_window,                    // window_size_left
-        true,                              // enable_cuda_graph
-        causal,                            // causal
-        attn_metadata->use_tensor_core);   // use_tensor_core
+      cache.shared_lse = torch::zeros({total_beam, n_heads, 1}, fp32_options);
+      cache.shared_o =
+          torch::zeros({total_beam, n_heads, head_dim}, model_options);
+      cache.unshared_lse = torch::zeros({total_beam, n_heads, 1}, fp32_options);
+      cache.unshared_o =
+          torch::zeros({total_beam, n_heads, head_dim}, model_options);
+
+      cache.q_cu_seq_lens_shared = torch::arange(
+          0,
+          (request_batch_size + 1) * beam_width,
+          beam_width,
+          torch::TensorOptions().dtype(torch::kInt32).device(tokens.device()));
+
+      cache.paged_kv_indptr_expanded = torch::arange(
+          total_beam + 1,
+          torch::TensorOptions().dtype(torch::kInt32).device(tokens.device()));
+      cache.paged_kv_indices_expanded = torch::arange(
+          total_beam,
+          torch::TensorOptions().dtype(torch::kInt32).device(tokens.device()));
+      cache.paged_kv_last_page_len_expanded = torch::full(
+          {total_beam},
+          static_cast<int32_t>(params.current_round + 1),
+          torch::TensorOptions().dtype(torch::kInt32).device(tokens.device()));
+
+      cache.cached_batch_size = static_cast<int32_t>(request_batch_size);
+      cache.cached_beam_size = static_cast<int32_t>(beam_width);
+      cache.cached_num_heads = static_cast<int32_t>(n_heads);
+      cache.cached_head_size = head_dim;
+
+      attn_metadata->two_stage_decode_cache = cache;
+
+      // 1) shared stage (prefill, causal) plan
+      layer::AttentionMetadata shared_attn_meta = *attn_metadata;
+      shared_attn_meta.q_cu_seq_lens = cache.q_cu_seq_lens_shared;
+      attn_metadata->plan_info->layer_id = 0;
+      layer::flashinfer::update_plan_info(
+          attn_metadata->plan_info,
+          xllm::kernel::cuda::determine_attention_backend(
+              /*pos_encoding_mode=*/0,
+              /*use_fp16_qk_reduction=*/false,
+              /*use_custom_mask=*/false),
+          shared_attn_meta,
+          dtype,
+          dtype,
+          dtype,
+          head_dim,
+          head_dim,
+          static_cast<int32_t>(n_heads),
+          static_cast<int32_t>(n_kv_heads),
+          /*block_size*/ 1,
+          sliding_window,
+          /*enable_cuda_graph*/ true,
+          /*causal*/ true,
+          /*use_tensor_core*/ true);
+
+      // 2) unshared stage (decode, non-tensor-core) plan
+      layer::AttentionMetadata unshared_attn_meta = *attn_metadata;
+      unshared_attn_meta.plan_info = attn_metadata->unshared_plan_info;
+      unshared_attn_meta.paged_kv_indptr = cache.paged_kv_indptr_expanded;
+      unshared_attn_meta.paged_kv_indices = cache.paged_kv_indices_expanded;
+      unshared_attn_meta.paged_kv_last_page_len =
+          cache.paged_kv_last_page_len_expanded;
+      unshared_attn_meta.use_tensor_core = false;
+
+      const int64_t max_decode_step =
+          params.unshared_k_caches.empty()
+              ? 0
+              : static_cast<int64_t>(params.unshared_k_caches[0].size(2));
+      CHECK_GT(max_decode_step, 0)
+          << "max_decode_step must be > 0 for two-stage unshared plan";
+
+      attn_metadata->unshared_plan_info->layer_id = 0;
+      layer::flashinfer::update_plan_info(attn_metadata->unshared_plan_info,
+                                          /*backend*/ "fa3",
+                                          unshared_attn_meta,
+                                          dtype,
+                                          dtype,
+                                          dtype,
+                                          head_dim,
+                                          head_dim,
+                                          static_cast<int32_t>(n_heads),
+                                          static_cast<int32_t>(n_kv_heads),
+                                          static_cast<int32_t>(max_decode_step),
+                                          sliding_window,
+                                          /*enable_cuda_graph*/ true,
+                                          /*causal*/ false,
+                                          /*use_tensor_core*/ false);
+    } else {
+      // Default decode plan
+      const bool pure_device =
+          !params.full_k_caches.empty() && !params.unshared_k_caches.empty();
+      const int32_t plan_block_size = pure_device ? 1 : block_size;
+      const bool use_tensor_core =
+          pure_device ? false : attn_metadata->use_tensor_core;
+
+      // Note: plan_info is only updated at layer 0, so we set layer_id to 0
+      attn_metadata->plan_info->layer_id = 0;
+
+      layer::flashinfer::update_plan_info(
+          attn_metadata->plan_info,
+          /*backend*/ "fa2",
+          *attn_metadata,
+          dtype,                             // query_dtype
+          dtype,                             // key_dtype
+          dtype,                             // output_dtype
+          head_dim,                          // head_dim_qk
+          head_dim,                          // head_dim_vo
+          static_cast<int32_t>(n_heads),     // num_qo_heads
+          static_cast<int32_t>(n_kv_heads),  // num_kv_heads
+          plan_block_size,                   // block_size
+          sliding_window,                    // window_size_left
+          true,                              // enable_cuda_graph
+          /*causal*/ false,
+          use_tensor_core);
+    }
   }
 
   // Return ModelInputParams with persistent buffer references if requested
@@ -525,7 +659,23 @@ torch::Tensor CudaGraphExecutorImpl::run(const torch::Tensor& tokens,
 
   // Get actual num_tokens from tokens shape
   const uint32_t n_tokens = tokens.size(/*dim=*/0);
-  const uint32_t bucket_num_tokens = get_bucket_num_tokens(n_tokens);
+  uint32_t bucket_num_tokens = get_bucket_num_tokens(n_tokens);
+  const bool pure_device_decode = !params.full_k_caches.empty() &&
+                                  !params.unshared_k_caches.empty() &&
+                                  (params.current_round >= 0);
+  if (pure_device_decode) {
+    // Step-level (PureDevice) decode with xattention assumes token dimension is
+    // exactly batch_size * beam_width. Padding breaks view/reshape logic and
+    // causes CUDA graph capture/replay to crash.
+    if (bucket_num_tokens != n_tokens) {
+      VLOG(kGraphExecutorLogVerboseLevel)
+          << "PureDevice decode does not support graph padding: forcing "
+             "bucket_num_tokens="
+          << n_tokens << " (was " << bucket_num_tokens << ")";
+    }
+    bucket_num_tokens = n_tokens;
+  }
+  const uint64_t graph_key = make_graph_key(bucket_num_tokens, params);
 
   // Check if conditions are suitable for graph execution (replay or capture)
   const auto max_seq_len = FLAGS_max_seq_len_for_graph_mode > 0
@@ -544,8 +694,8 @@ torch::Tensor CudaGraphExecutorImpl::run(const torch::Tensor& tokens,
     return model_->forward(tokens, positions, kv_caches, params);
   }
 
-  // Check if captured graph exists for this bucket num_tokens
-  auto it = graphs_.find(bucket_num_tokens);
+  // Check if captured graph exists for this key
+  auto it = graphs_.find(graph_key);
   if (it != graphs_.end()) {
     // Replay the existing graph
     VLOG(kGraphExecutorLogVerboseLevel)
@@ -553,7 +703,7 @@ torch::Tensor CudaGraphExecutorImpl::run(const torch::Tensor& tokens,
     return it->second->replay(tokens, positions, kv_caches, params);
   }
 
-  // Graph doesn't exist for this bucket num_tokens, try to create it lazily
+  // Graph doesn't exist for this key, try to create it lazily
   auto graph = std::make_unique<CudaGraph>(*persistent_param_, device_.index());
   VLOG(kGraphExecutorLogVerboseLevel)
       << "CudaGraphExecutorImpl::run() in capture mode";
@@ -568,23 +718,23 @@ torch::Tensor CudaGraphExecutorImpl::run(const torch::Tensor& tokens,
                                         graph_pool_);
 
   if (capture_success) {
-    LOG(INFO) << "Lazy capturing CUDA graph for bucket num_tokens: "
-              << bucket_num_tokens << " (actual num_tokens: " << n_tokens
-              << ") done";
+    LOG(INFO) << "Lazy capturing CUDA graph for key: " << graph_key
+              << " (bucket_num_tokens: " << bucket_num_tokens
+              << ", actual num_tokens: " << n_tokens << ") done";
 
     // Save the graph for future reuse
-    graphs_[bucket_num_tokens] = std::move(graph);
+    graphs_[graph_key] = std::move(graph);
 
     // Return the output from capture (no need to replay since capture
     // already executed)
-    return graphs_[bucket_num_tokens]->get_hidden_states(n_tokens);
+    return graphs_[graph_key]->get_hidden_states(n_tokens);
   } else if (FLAGS_force_graph_eager) {
     return graph->get_hidden_states(n_tokens);
   }
 
   // Fallback to eager mode if capture fails
-  LOG(ERROR) << "Failed to capture CUDA graph for bucket num_tokens: "
-             << bucket_num_tokens;
+  LOG(ERROR) << "Failed to capture CUDA graph for key: " << graph_key
+             << " (bucket_num_tokens: " << bucket_num_tokens << ")";
   COUNTER_INC(num_model_execution_total_eager);
   return model_->forward(tokens, positions, kv_caches, params);
 }
@@ -607,6 +757,32 @@ uint32_t CudaGraphExecutorImpl::get_bucket_num_tokens(
     // For num_tokens > 8, use multiples of 16
     return ((num_tokens + 15) / 16) * 16;
   }
+}
+
+uint64_t CudaGraphExecutorImpl::make_graph_key(
+    uint32_t bucket_num_tokens,
+    const ModelInputParams& params) const {
+  const bool pure_device =
+      !params.full_k_caches.empty() && !params.unshared_k_caches.empty();
+  const bool enable_two_stage =
+      pure_device && FLAGS_enable_xattention_two_stage_decode;
+
+  const int32_t round = pure_device ? params.current_round : -1;
+  const uint16_t round_key =
+      static_cast<uint16_t>(std::max(-1, std::min(round, 65534)) + 1);
+  const uint8_t beam_key =
+      pure_device
+          ? static_cast<uint8_t>(std::max(0, std::min(params.beam_width, 255)))
+          : 0;
+  uint8_t flags = 0;
+  flags |= pure_device ? 0x1 : 0;
+  flags |= enable_two_stage ? 0x2 : 0;
+
+  uint64_t key = static_cast<uint64_t>(bucket_num_tokens);
+  key |= (static_cast<uint64_t>(round_key) << 32);
+  key |= (static_cast<uint64_t>(beam_key) << 48);
+  key |= (static_cast<uint64_t>(flags) << 56);
+  return key;
 }
 
 }  // namespace xllm
