@@ -700,7 +700,16 @@ RecWorkerImpl::LlmRecPureDevicePipeline::compute_next_round_input_async(
   auto future = promise.getSemiFuture();
 
   // Launch async computation in thread pool (can overlap with GPU execution)
+  // NOTE: masked_select operations in this lambda may fail if executed during
+  // CUDA graph capture. The error "operation not supported on global/shared
+  // address space" suggests the tensors may not be contiguous or have
+  // incompatible memory layout.
+  // CRITICAL FIX: Access captured variables and std::this_thread::get_id() at
+  // lambda start to ensure memory visibility across threads
   threadpool_.schedule([=, promise = std::move(promise)]() mutable {
+    VLOG(50) << "[DEBUG] Async computation started: current_step="
+             << current_step << ", batch_size=" << batch_size
+             << ", thread_id=" << std::this_thread::get_id();
     // [batch_size, beam_size, FLAGS_max_token_per_req]
     auto shared_kv_offsets =
         full_kv_offsets.slice(2, 0, FLAGS_max_token_per_req)
@@ -760,7 +769,24 @@ RecWorkerImpl::LlmRecPureDevicePipeline::compute_next_round_input_async(
     auto cumsum_result = torch::cumsum(batch_beam_shared_kv_lens, 0);
     auto paged_kv_indptr = torch::cat(
         {torch::zeros({1}, paged_options), cumsum_result.to(paged_options)}, 0);
-    auto paged_kv_indices = full_kv_indices.masked_select(full_kv_mask);
+
+    // Fix for "operation not supported on global/shared address space" error:
+    // Ensure tensors are contiguous before masked_select, as non-contiguous
+    // tensors with certain memory layouts may not support masked_select
+    // operations CRITICAL: Access tensor properties before masked_select to
+    // ensure memory visibility
+    VLOG(50) << "[DEBUG] Before masked_select: full_kv_indices.defined()="
+             << full_kv_indices.defined()
+             << ", full_kv_mask.defined()=" << full_kv_mask.defined();
+
+    auto full_kv_indices_contiguous = full_kv_indices.is_contiguous()
+                                          ? full_kv_indices
+                                          : full_kv_indices.contiguous();
+    auto full_kv_mask_contiguous =
+        full_kv_mask.is_contiguous() ? full_kv_mask : full_kv_mask.contiguous();
+
+    auto paged_kv_indices =
+        full_kv_indices_contiguous.masked_select(full_kv_mask_contiguous);
     auto paged_kv_last_page_len =
         torch::ones({batch_size * beam_size}, paged_options);
 
@@ -768,6 +794,7 @@ RecWorkerImpl::LlmRecPureDevicePipeline::compute_next_round_input_async(
     results.paged_kv_indices = paged_kv_indices;
     results.paged_kv_indptr = paged_kv_indptr;
     results.paged_kv_last_page_len = paged_kv_last_page_len;
+
     promise.setValue(results);
   });
 
@@ -823,6 +850,13 @@ void RecWorkerImpl::LlmRecPureDevicePipeline::update_input_for_next_round(
   auto full_kv_mask = worker_.full_kv_cache_offsets_->full_kv_mask;
   // [FLAGS_max_seqs_per_batch, beam_size, max_decode_step]
   auto full_kv_indices = worker_.full_kv_cache_offsets_->full_kv_indices;
+
+  VLOG(50) << "[DEBUG] update_input_for_next_round: "
+           << "full_kv_offsets.data_ptr()=" << full_kv_offsets.data_ptr()
+           << ", full_kv_mask.data_ptr()=" << full_kv_mask.data_ptr()
+           << ", full_kv_indices.data_ptr()=" << full_kv_indices.data_ptr()
+           << ", current_step=" << current_step << ", batch_size=" << batch_size
+           << ", beam_size=" << beam_size;
 
   // [batch_size, beam_size, FLAGS_max_token_per_req]
   auto shared_kv_offsets = full_kv_offsets.slice(2, 0, FLAGS_max_token_per_req)
@@ -889,7 +923,40 @@ void RecWorkerImpl::LlmRecPureDevicePipeline::update_input_for_next_round(
   auto cumsum_result = torch::cumsum(batch_beam_shared_kv_lens, 0);
   paged_kv_indptr = torch::cat(
       {torch::zeros({1}, paged_options), cumsum_result.to(paged_options)}, 0);
-  paged_kv_indices = full_kv_indices.masked_select(full_kv_mask);
+
+  // Debug logging before masked_select: detailed tensor attributes
+  VLOG(50) << "[DEBUG] Before masked_select (update_input_for_next_round): "
+           << "full_kv_indices.defined()=" << full_kv_indices.defined()
+           << ", full_kv_indices.sizes()=" << full_kv_indices.sizes()
+           << ", full_kv_indices.device()=" << full_kv_indices.device()
+           << ", full_kv_indices.is_contiguous()="
+           << full_kv_indices.is_contiguous() << ", full_kv_indices.data_ptr()="
+           << (full_kv_indices.defined() ? full_kv_indices.data_ptr() : nullptr)
+           << ", full_kv_mask.defined()=" << full_kv_mask.defined()
+           << ", full_kv_mask.sizes()=" << full_kv_mask.sizes()
+           << ", full_kv_mask.device()=" << full_kv_mask.device()
+           << ", full_kv_mask.is_contiguous()=" << full_kv_mask.is_contiguous()
+           << ", full_kv_mask.data_ptr()="
+           << (full_kv_mask.defined() ? full_kv_mask.data_ptr() : nullptr)
+           << ", full_kv_mask.dtype()=" << full_kv_mask.dtype();
+
+  // Fix for "operation not supported on global/shared address space" error:
+  // Ensure tensors are contiguous before masked_select, as non-contiguous
+  // tensors with certain memory layouts may not support masked_select
+  // operations
+  auto full_kv_indices_contiguous = full_kv_indices.is_contiguous()
+                                        ? full_kv_indices
+                                        : full_kv_indices.contiguous();
+  auto full_kv_mask_contiguous =
+      full_kv_mask.is_contiguous() ? full_kv_mask : full_kv_mask.contiguous();
+
+  paged_kv_indices =
+      full_kv_indices_contiguous.masked_select(full_kv_mask_contiguous);
+
+  // Debug logging after masked_select
+  VLOG(50) << "[DEBUG] After masked_select (compute_shared_kv_tensors): "
+           << "paged_kv_indices.defined()=" << paged_kv_indices.defined()
+           << ", paged_kv_indices.sizes()=" << paged_kv_indices.sizes();
   paged_kv_last_page_len = torch::ones({batch_size * beam_size}, paged_options);
 
   input.input_params.paged_kv_indices = paged_kv_indices;
