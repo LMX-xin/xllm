@@ -866,12 +866,9 @@ uint64_t CudaGraphExecutorImpl::make_graph_key(
   const bool enable_two_stage =
       pure_device && FLAGS_enable_xattention_two_stage_decode;
 
-  const int32_t round = pure_device && params.current_round.defined() &&
-                                params.current_round.numel() > 0
-                            ? params.current_round.item<int32_t>()
-                            : -1;
-  const uint16_t round_key =
-      static_cast<uint16_t>(std::max(-1, std::min(round, 65534)) + 1);
+  // In PureDevice two-stage decode, current_round/step is provided as a device
+  // tensor (stable pointer, mutable value). Graph structure does not depend on
+  // round, so we do not shard graphs by round to avoid redundant captures.
   const uint8_t beam_key =
       pure_device
           ? static_cast<uint8_t>(std::max(0, std::min(params.beam_width, 255)))
@@ -881,7 +878,6 @@ uint64_t CudaGraphExecutorImpl::make_graph_key(
   flags |= enable_two_stage ? 0x2 : 0;
 
   uint64_t key = static_cast<uint64_t>(bucket_num_tokens);
-  key |= (static_cast<uint64_t>(round_key) << 32);
   key |= (static_cast<uint64_t>(beam_key) << 48);
   key |= (static_cast<uint64_t>(flags) << 56);
   return key;

@@ -128,18 +128,7 @@ Engine::KVCacheCapacity RecEngine::estimate_kv_cache_capacity() {
   const int64_t max_cache_size = options_.max_cache_size();
   const double max_memory_utilization = options_.max_memory_utilization();
 
-  int64_t cache_size_in_bytes = pipeline_->estimate_min_available_memory();
-
-  // apply memory cap from config
-  if (max_memory_utilization < 1.0 || max_cache_size > 0) {
-    // Re-estimate with caps applied (pipeline returns raw available memory)
-    // The caps are applied in estimate_min_available_memory
-  }
-
   KVCacheCapacity kv_cache_cap;
-  kv_cache_cap.cache_size_in_bytes = std::max(cache_size_in_bytes, int64_t(0));
-  CHECK_GT(kv_cache_cap.cache_size_in_bytes, 0)
-      << "Available kv cache size must be greater than 0";
 
   // compute kv cache slot size
   const int64_t dtype_size = torch::scalarTypeToTypeMeta(dtype_).itemsize();
@@ -149,8 +138,34 @@ Engine::KVCacheCapacity RecEngine::estimate_kv_cache_capacity() {
 
   const int32_t block_size = options_.block_size();
   const int64_t block_size_in_bytes = block_size * slot_size;
-  kv_cache_cap.n_blocks = kv_cache_cap.cache_size_in_bytes /
-                          (args_.n_layers() * block_size_in_bytes);
+  const int64_t bytes_per_block_all_layers =
+      kv_cache_cap.n_layers * block_size_in_bytes;
+
+  // In PureDevice two-stage xattention, full_k/v caches are self-managed.
+  // The paged KVCache is kept as a minimal interface placeholder: allocate
+  // n_blocks=1 to reduce memory usage and avoid initialization failures when
+  // multi-stream memory estimation drops to 0.
+  if (FLAGS_enable_xattention_two_stage_decode &&
+      dynamic_cast<PureDeviceEnginePipeline*>(pipeline_.get()) != nullptr) {
+    kv_cache_cap.n_blocks = 1;
+    kv_cache_cap.cache_size_in_bytes = bytes_per_block_all_layers;
+    return kv_cache_cap;
+  }
+
+  int64_t cache_size_in_bytes = pipeline_->estimate_min_available_memory();
+
+  // apply memory cap from config
+  if (max_memory_utilization < 1.0 || max_cache_size > 0) {
+    // Re-estimate with caps applied (pipeline returns raw available memory)
+    // The caps are applied in estimate_min_available_memory
+  }
+
+  kv_cache_cap.cache_size_in_bytes = std::max(cache_size_in_bytes, int64_t(0));
+  CHECK_GT(kv_cache_cap.cache_size_in_bytes, 0)
+      << "Available kv cache size must be greater than 0";
+
+  kv_cache_cap.n_blocks =
+      kv_cache_cap.cache_size_in_bytes / bytes_per_block_all_layers;
   CHECK_GT(kv_cache_cap.n_blocks, 0) << "no n_blocks for kv cache";
 
   return kv_cache_cap;
