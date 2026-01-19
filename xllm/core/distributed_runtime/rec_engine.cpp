@@ -143,12 +143,14 @@ Engine::KVCacheCapacity RecEngine::estimate_kv_cache_capacity() {
 
   // In PureDevice two-stage xattention, full_k/v caches are self-managed.
   // The paged KVCache is kept as a minimal interface placeholder: allocate
-  // n_blocks=1 to reduce memory usage and avoid initialization failures when
-  // multi-stream memory estimation drops to 0.
+  // a tiny number of blocks to reduce memory usage and avoid initialization
+  // failures when multi-stream memory estimation drops to 0.
+  // NOTE: BlockManager reserves block 0 for padding, so n_blocks must be >= 2.
   if (FLAGS_enable_xattention_two_stage_decode &&
       dynamic_cast<PureDeviceEnginePipeline*>(pipeline_.get()) != nullptr) {
-    kv_cache_cap.n_blocks = 1;
-    kv_cache_cap.cache_size_in_bytes = bytes_per_block_all_layers;
+    kv_cache_cap.n_blocks = 2;
+    kv_cache_cap.cache_size_in_bytes =
+        bytes_per_block_all_layers * kv_cache_cap.n_blocks;
     return kv_cache_cap;
   }
 
