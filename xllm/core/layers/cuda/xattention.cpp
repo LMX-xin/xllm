@@ -180,7 +180,17 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> XAttentionImpl::forward(
               torch::full({batch_size * beam_size},
                           0,
                           attn_metadata.paged_kv_last_page_len.options());
-          cache.paged_kv_last_page_len_expanded.fill_(attn_metadata.step + 1);
+          //   cache.paged_kv_last_page_len_expanded.fill_(attn_metadata.step +
+          //   1);
+          int32_t step_value = 0;
+          if (attn_metadata.step.defined() && attn_metadata.step.numel() > 0) {
+            torch::Tensor step_scalar = attn_metadata.step;
+            if (step_scalar.dim() > 0) {
+              step_scalar = step_scalar.squeeze();
+            }
+            step_value = step_scalar.item<int32_t>();
+          }
+          cache.paged_kv_last_page_len_expanded.fill_(step_value + 1);
 
           // paged_kv_indices: 每个 (batch, beam) 对应一个 block_id
           cache.paged_kv_indices_expanded = torch::arange(
