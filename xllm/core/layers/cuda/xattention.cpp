@@ -223,9 +223,9 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> XAttentionImpl::forward(
           static_cast<int64_t>(FLAGS_max_seqs_per_batch) *
           static_cast<int64_t>(FLAGS_max_token_per_req);
       torch::Tensor shared_k_cache =
-          attn_metadata.full_k_cache.slice(0, 0, unshared_offset);
+          attn_metadata.full_k_cache.slice(0, 0, unshared_offset).contiguous();
       torch::Tensor shared_v_cache =
-          attn_metadata.full_v_cache.slice(0, 0, unshared_offset);
+          attn_metadata.full_v_cache.slice(0, 0, unshared_offset).contiguous();
 
       // DEBUG: Print two-stage decode shared stage parameters
       LOG(INFO) << "[XAttention TwoStage Shared DEBUG] layer_id="
