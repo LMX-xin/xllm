@@ -67,6 +67,22 @@ void update_plan_info(std::shared_ptr<PlanInfo> plan_info,
         kv_cu_seq_lens_host.slice(0, 1) - kv_cu_seq_lens_host.slice(0, 0, -1);
     const int64_t total_num_rows = qo_indptr_host[-1].item<int64_t>();
     const int64_t batch_size = qo_indptr_host.size(0) - 1;
+
+    // DEBUG: Print prefill plan info parameters
+    LOG(INFO) << "[FlashInfer PlanInfo DEBUG] causal=true (prefill path): "
+              << "backend=" << backend << ", batch_size=" << batch_size
+              << ", total_num_rows=" << total_num_rows
+              << ", num_qo_heads=" << num_qo_heads
+              << ", num_kv_heads=" << num_kv_heads
+              << ", head_dim_qk=" << head_dim_qk
+              << ", head_dim_vo=" << head_dim_vo
+              << ", qo_indptr_host.sizes()=" << qo_indptr_host.sizes()
+              << ", qo_indptr_host=" << qo_indptr_host
+              << ", kv_cu_seq_lens_host.sizes()=" << kv_cu_seq_lens_host.sizes()
+              << ", kv_cu_seq_lens_host=" << kv_cu_seq_lens_host
+              << ", kv_len_arr_host.sizes()=" << kv_len_arr_host.sizes()
+              << ", kv_len_arr_host=" << kv_len_arr_host;
+
     auto call_plan_func = [&](auto&& func) {
       return func.call(attn_meta.float_workspace_buffer,
                        attn_meta.int_workspace_buffer,

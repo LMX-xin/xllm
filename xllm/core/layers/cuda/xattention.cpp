@@ -59,6 +59,17 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> XAttentionImpl::forward(
     CHECK(!attn_metadata.is_chunked_prefill)
         << "chunked prefill is not supported";
 
+    // DEBUG: Print prefill stage parameters
+    LOG(INFO) << "[XAttention Prefill DEBUG] layer_id="
+              << attn_metadata.plan_info->layer_id
+              << ", query.sizes()=" << query.sizes()
+              << ", key.sizes()=" << key.sizes()
+              << ", full_k_cache.sizes()=" << attn_metadata.full_k_cache.sizes()
+              << ", kv_cu_seq_lens.sizes()="
+              << attn_metadata.kv_cu_seq_lens.sizes()
+              << ", q_cu_seq_lens.sizes()="
+              << attn_metadata.q_cu_seq_lens.sizes();
+
     // maybe we need to update shared attn state before execute attention,
     // currently we update flashinfer step_wise_attn_state_ at layer 0.
     bool causal = attn_metadata.is_prefill || attn_metadata.is_chunked_prefill;
@@ -180,7 +191,15 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> XAttentionImpl::forward(
               torch::full({batch_size * beam_size},
                           0,
                           attn_metadata.paged_kv_last_page_len.options());
-          cache.paged_kv_last_page_len_expanded.fill_(attn_metadata.step + 1);
+          int32_t step_value = 0;
+          if (attn_metadata.step.defined() && attn_metadata.step.numel() > 0) {
+            torch::Tensor step_scalar = attn_metadata.step;
+            if (step_scalar.dim() > 0) {
+              step_scalar = step_scalar.squeeze();
+            }
+            step_value = step_scalar.item<int32_t>();
+          }
+          cache.paged_kv_last_page_len_expanded.fill_(step_value + 1);
 
           // paged_kv_indices: 每个 (batch, beam) 对应一个 block_id
           cache.paged_kv_indices_expanded = torch::arange(
@@ -207,6 +226,21 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> XAttentionImpl::forward(
           attn_metadata.full_k_cache.slice(0, 0, unshared_offset);
       torch::Tensor shared_v_cache =
           attn_metadata.full_v_cache.slice(0, 0, unshared_offset);
+
+      // DEBUG: Print two-stage decode shared stage parameters
+      LOG(INFO) << "[XAttention TwoStage Shared DEBUG] layer_id="
+                << attn_metadata.plan_info->layer_id
+                << ", batch_size=" << batch_size << ", beam_size=" << beam_size
+                << ", unshared_offset=" << unshared_offset
+                << ", full_k_cache.sizes()="
+                << attn_metadata.full_k_cache.sizes()
+                << ", shared_k_cache.sizes()=" << shared_k_cache.sizes()
+                << ", kv_cu_seq_lens.sizes()="
+                << attn_metadata.kv_cu_seq_lens.sizes()
+                << ", kv_cu_seq_lens=" << attn_metadata.kv_cu_seq_lens
+                << ", q_cu_seq_lens_shared.sizes()="
+                << cache.q_cu_seq_lens_shared.sizes()
+                << ", q_cu_seq_lens_shared=" << cache.q_cu_seq_lens_shared;
 
       // Step 2: Prepare query (不需要 clone，直接使用 view)
       // shared_q 和 query 的数据相同，只是 shape 不同
@@ -260,6 +294,21 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> XAttentionImpl::forward(
           attn_metadata.page_locked_int_workspace_buffer;
       shared_attention_params.key = shared_k_cache;
       shared_attention_params.value = shared_v_cache;
+
+      // DEBUG: Print before batch_prefill call
+      LOG(INFO) << "[XAttention TwoStage Shared DEBUG] Before batch_prefill: "
+                << "shared_q.sizes()=" << shared_q.sizes()
+                << ", shared_k_cache.sizes()=" << shared_k_cache.sizes()
+                << ", shared_o.sizes()=" << cache.shared_o.sizes()
+                << ", shared_attn_meta.q_cu_seq_lens.sizes()="
+                << shared_attn_meta.q_cu_seq_lens.sizes()
+                << ", shared_attn_meta.kv_cu_seq_lens.sizes()="
+                << shared_attn_meta.kv_cu_seq_lens.sizes()
+                << ", shared_attn_meta.kv_cu_seq_lens="
+                << shared_attn_meta.kv_cu_seq_lens
+                << ", plan_info->uri=" << attn_metadata.plan_info->uri
+                << ", plan_info->plan_info.defined()="
+                << attn_metadata.plan_info->plan_info.defined();
 
       xllm::kernel::batch_prefill(shared_attention_params);
       // batch_prefill writes directly to cache.shared_o and cache.shared_lse
