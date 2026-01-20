@@ -30,6 +30,23 @@ class XAttentionImpl : public AttentionImpl {
       torch::Tensor& value,
       KVCache& kv_cache,
       std::optional<torch::Tensor> output = std::nullopt) override;
+
+  // 两段式解码：先计算共享 KV cache 的 attention，再计算非共享 KV cache 的
+  // attention 公开以便单元测试使用
+  void TwoStageDecode(const AttentionMetadata& attn_metadata,
+                      torch::Tensor& query,
+                      torch::Tensor& output_tensor,
+                      uint32_t batch_size,
+                      uint32_t beam_size,
+                      uint32_t total_beam);
+
+  // 一段式解码：直接使用完整的 KV cache 计算 attention
+  // 公开以便单元测试使用
+  void SingleStageDecode(const AttentionMetadata& attn_metadata,
+                         torch::Tensor& query,
+                         torch::Tensor& output_tensor,
+                         torch::Tensor& key,
+                         uint32_t batch_size);
 };
 TORCH_MODULE(XAttention);
 

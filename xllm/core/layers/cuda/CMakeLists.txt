@@ -1,4 +1,5 @@
 include(cc_library)
+include(cc_test)
 
 cc_library(
   NAME
@@ -16,3 +17,19 @@ cc_library(
   DEPS
     :common_layers
 )
+
+cc_test(
+  NAME
+    xattention_decode_test
+  SRCS
+    xattention_test.cpp
+  DEPS
+    :cuda_layers
+    :common_layers
+    :kernels
+    :flags
+    torch
+    GTest::gtest_main
+    glog::glog
+)
+target_link_libraries(xattention_decode_test PRIVATE brpc Python::Python torch_python)
