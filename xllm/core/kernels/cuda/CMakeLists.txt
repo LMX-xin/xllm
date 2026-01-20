@@ -49,7 +49,9 @@ cc_test(
     GTest::gtest_main
     glog::glog
 )
-target_link_libraries(flashinfer_test PRIVATE brpc)
+# Link Python library to resolve Python C API symbols (e.g., PyModule_Create2)
+# required by flashinfer AOT-compiled .so files loaded via dlopen
+target_link_libraries(flashinfer_test PRIVATE brpc Python::Python)
 
 cc_test(
   NAME
