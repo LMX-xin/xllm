@@ -43,10 +43,11 @@ void batch_prefill(const std::string& uri,
   //             << ", uri=" << uri;
   // }
 
+  // 根据 URI 确定 backend，而不是重新决定
+  // fa3 的 URI 包含 "_sm90" 后缀（见 utils.cpp:86）
   std::string backend =
-      determine_attention_backend(/*pos_encoding_mode=*/0,
-                                  /*use_fp16_qk_reduction=*/false,
-                                  /*use_custom_mask=*/false);
+      (uri.find("_sm90") != std::string::npos) ? "fa3" : "fa2";
+  VLOG(100) << "backend: " << backend;
 
   if (backend == "fa2") {
     FunctionFactory::get_instance().fa2_prefill_ragged_run_func(uri).call(

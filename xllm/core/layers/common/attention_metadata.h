@@ -43,6 +43,12 @@ struct TwoStageDecodeCache {
   torch::Tensor paged_kv_last_page_len_expanded;  // [batch_size * beam_size]
                                                   // (value updated per layer)
 
+  // Unshared workspace buffers for two-stage decode (avoid conflict with shared
+  // stage during CUDA graph capture/replay)
+  torch::Tensor unshared_float_workspace_buffer;
+  torch::Tensor unshared_int_workspace_buffer;
+  torch::Tensor unshared_page_locked_int_workspace_buffer;
+
   // Cached parameters for validation
   int32_t cached_batch_size = -1;
   int32_t cached_beam_size = -1;

@@ -153,6 +153,19 @@ CudaGraphPersistentParam::CudaGraphPersistentParam(
       torch::zeros({max_total_beam}, int32_options);
   persistent_two_decode_cache_.paged_kv_last_page_len_expanded =
       torch::zeros({max_total_beam}, int32_options);
+
+  // Initialize unshared workspace buffers for two-stage decode
+  // These buffers are independent from shared stage to avoid plan_info conflict
+  if (FLAGS_enable_xattention_two_stage_decode) {
+    unshared_float_workspace_buffer_ =
+        torch::empty({FLAGS_flashinfer_workspace_buffer_size},
+                     torch::dtype(torch::kUInt8).device(device));
+    unshared_int_workspace_buffer_ = torch::empty(
+        {8 * 1024 * 1024}, torch::dtype(torch::kUInt8).device(device));
+    unshared_page_locked_int_workspace_buffer_ = torch::empty(
+        {unshared_int_workspace_buffer_.size(0)},
+        torch::dtype(torch::kUInt8).device(torch::kCPU).pinned_memory(true));
+  }
 }
 
 std::optional<ModelInputParams> CudaGraphPersistentParam::update(
@@ -452,6 +465,14 @@ std::optional<ModelInputParams> CudaGraphPersistentParam::update(
         cache.paged_kv_last_page_len_expanded;
     unshared_attn_meta.use_tensor_core = false;
 
+    // Use independent workspace buffer for unshared stage to avoid conflict
+    // with shared stage plan_info during CUDA graph capture
+    unshared_attn_meta.float_workspace_buffer =
+        unshared_float_workspace_buffer_;
+    unshared_attn_meta.int_workspace_buffer = unshared_int_workspace_buffer_;
+    unshared_attn_meta.page_locked_int_workspace_buffer =
+        unshared_page_locked_int_workspace_buffer_;
+
     const int64_t max_decode_step =
         params.unshared_k_caches.empty()
             ? 0
@@ -576,6 +597,12 @@ layer::TwoStageDecodeCache CudaGraphPersistentParam::get_two_stage_decode_cache(
   cache.cached_num_heads = static_cast<int32_t>(n_heads);
   cache.cached_head_size = head_dim;
 
+  // Set unshared workspace buffers for CUDA graph mode
+  cache.unshared_float_workspace_buffer = unshared_float_workspace_buffer_;
+  cache.unshared_int_workspace_buffer = unshared_int_workspace_buffer_;
+  cache.unshared_page_locked_int_workspace_buffer =
+      unshared_page_locked_int_workspace_buffer_;
+
   return cache;
 }
 
@@ -658,7 +685,7 @@ bool CudaGraph::capture(CausalLM* model,
                      persistent_param_.persistent_positions(padded_num_tokens_),
                      kv_cache,
                      graph_params_opt.value());
-
+  VLOG(20) << "model forward end";
   // Store result in persistent buffer
   persistent_param_.set_hidden_states(forward_result);
 
@@ -758,7 +785,9 @@ torch::Tensor CudaGraphExecutorImpl::run(const torch::Tensor& tokens,
   // Get actual num_tokens from tokens shape
   const uint32_t n_tokens = tokens.size(/*dim=*/0);
   VLOG(1) << "n_tokens: " << n_tokens;
+  VLOG(2) << "n_tokens: " << n_tokens;
   uint32_t bucket_num_tokens = get_bucket_num_tokens(n_tokens);
+  VLOG(2) << "bucket_num_tokens: " << bucket_num_tokens;
   const bool pure_device_decode =
       !params.full_k_caches.empty() && !params.unshared_k_caches.empty() &&
       params.current_round.defined() && params.current_round.numel() > 0;
@@ -774,14 +803,16 @@ torch::Tensor CudaGraphExecutorImpl::run(const torch::Tensor& tokens,
     }
     bucket_num_tokens = n_tokens;
   }
-  const uint64_t graph_key = make_graph_key(bucket_num_tokens, params);
 
   // Check if conditions are suitable for graph execution (replay or capture)
   const auto max_seq_len = FLAGS_max_seq_len_for_graph_mode > 0
                                ? FLAGS_max_seq_len_for_graph_mode
                                : args_.max_position_embeddings();
-  const bool seq_len_supported = params.kv_max_seq_len <= max_seq_len;
 
+  const bool seq_len_supported = params.kv_max_seq_len <= max_seq_len;
+  VLOG(20) << "seq_len_supported: " << seq_len_supported;
+  VLOG(20) << "max_seq_len: " << max_seq_len;
+  VLOG(20) << "params.kv_max_seq_len: " << params.kv_max_seq_len;
   // Combined condition for graph capture support
   const bool capture_supported = seq_len_supported;
 
@@ -793,19 +824,21 @@ torch::Tensor CudaGraphExecutorImpl::run(const torch::Tensor& tokens,
     return model_->forward(tokens, positions, kv_caches, params);
   }
 
-  // Check if captured graph exists for this key
-  auto it = graphs_.find(graph_key);
+  // Check if captured graph exists for this bucket num_tokens
+  auto it = graphs_.find(bucket_num_tokens);
   if (it != graphs_.end()) {
     // Replay the existing graph
     VLOG(kGraphExecutorLogVerboseLevel)
         << "CudaGraphExecutorImpl::run() in replay mode";
+    VLOG(20) << "replay graph";
     return it->second->replay(tokens, positions, kv_caches, params);
   }
 
-  // Graph doesn't exist for this key, try to create it lazily
+  // Graph doesn't exist for this bucket num_tokens, try to create it lazily
   auto graph = std::make_unique<CudaGraph>(*persistent_param_, device_.index());
   VLOG(kGraphExecutorLogVerboseLevel)
       << "CudaGraphExecutorImpl::run() in capture mode";
+  VLOG(20) << "capture graph run";
   bool capture_success = graph->capture(model_,
                                         args_,
                                         options_,
@@ -817,22 +850,26 @@ torch::Tensor CudaGraphExecutorImpl::run(const torch::Tensor& tokens,
                                         graph_pool_);
 
   if (capture_success) {
-    LOG(INFO) << "Lazy capturing CUDA graph for key: " << graph_key
+    LOG(INFO) << "Lazy capturing CUDA graph for bucket num_tokens: "
+              << bucket_num_tokens
               << " (bucket_num_tokens: " << bucket_num_tokens
               << ", actual num_tokens: " << n_tokens << ") done";
 
     // Save the graph for future reuse
-    graphs_[graph_key] = std::move(graph);
+    graphs_[bucket_num_tokens] = std::move(graph);
 
     // Return the output from capture (no need to replay since capture
     // already executed)
-    return graphs_[graph_key]->get_hidden_states(n_tokens);
+    VLOG(20) << "return graph";
+    return graphs_[bucket_num_tokens]->get_hidden_states(n_tokens);
   } else if (FLAGS_force_graph_eager) {
+    VLOG(20) << "force graph eager";
     return graph->get_hidden_states(n_tokens);
   }
 
   // Fallback to eager mode if capture fails
-  LOG(ERROR) << "Failed to capture CUDA graph for key: " << graph_key
+  LOG(ERROR) << "Failed to capture CUDA graph for bucket num_tokens: "
+             << bucket_num_tokens
              << " (bucket_num_tokens: " << bucket_num_tokens << ")";
   COUNTER_INC(num_model_execution_total_eager);
   return model_->forward(tokens, positions, kv_caches, params);
@@ -856,35 +893,6 @@ uint32_t CudaGraphExecutorImpl::get_bucket_num_tokens(
     // For num_tokens > 8, use multiples of 16
     return ((num_tokens + 15) / 16) * 16;
   }
-}
-
-uint64_t CudaGraphExecutorImpl::make_graph_key(
-    uint32_t bucket_num_tokens,
-    const ModelInputParams& params) const {
-  const bool pure_device =
-      !params.full_k_caches.empty() && !params.unshared_k_caches.empty();
-  const bool enable_two_stage =
-      pure_device && FLAGS_enable_xattention_two_stage_decode;
-
-  const int32_t round = pure_device && params.current_round.defined() &&
-                                params.current_round.numel() > 0
-                            ? params.current_round.item<int32_t>()
-                            : -1;
-  const uint16_t round_key =
-      static_cast<uint16_t>(std::max(-1, std::min(round, 65534)) + 1);
-  const uint8_t beam_key =
-      pure_device
-          ? static_cast<uint8_t>(std::max(0, std::min(params.beam_width, 255)))
-          : 0;
-  uint8_t flags = 0;
-  flags |= pure_device ? 0x1 : 0;
-  flags |= enable_two_stage ? 0x2 : 0;
-
-  uint64_t key = static_cast<uint64_t>(bucket_num_tokens);
-  key |= (static_cast<uint64_t>(round_key) << 32);
-  key |= (static_cast<uint64_t>(beam_key) << 48);
-  key |= (static_cast<uint64_t>(flags) << 56);
-  return key;
 }
 
 }  // namespace xllm

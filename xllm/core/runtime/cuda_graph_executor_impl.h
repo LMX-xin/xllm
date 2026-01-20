@@ -186,6 +186,12 @@ class CudaGraphPersistentParam {
 
   // TODO maybe not used. or use q_cu_seq_lens instead.
   torch::Tensor persistent_chunked_prefill_qo_indptr_;
+
+  // Unshared workspace buffer for two-stage decode (avoid conflict with shared
+  // stage)
+  torch::Tensor unshared_float_workspace_buffer_;
+  torch::Tensor unshared_int_workspace_buffer_;
+  torch::Tensor unshared_page_locked_int_workspace_buffer_;
 };
 
 // CUDA graph executor using libtorch CUDAGraph for memory management

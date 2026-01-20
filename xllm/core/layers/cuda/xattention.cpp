@@ -180,7 +180,17 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> XAttentionImpl::forward(
               torch::full({batch_size * beam_size},
                           0,
                           attn_metadata.paged_kv_last_page_len.options());
-          cache.paged_kv_last_page_len_expanded.fill_(attn_metadata.step + 1);
+          //   cache.paged_kv_last_page_len_expanded.fill_(attn_metadata.step +
+          //   1);
+          int32_t step_value = 0;
+          if (attn_metadata.step.defined() && attn_metadata.step.numel() > 0) {
+            torch::Tensor step_scalar = attn_metadata.step;
+            if (step_scalar.dim() > 0) {
+              step_scalar = step_scalar.squeeze();
+            }
+            step_value = step_scalar.item<int32_t>();
+          }
+          cache.paged_kv_last_page_len_expanded.fill_(step_value + 1);
 
           // paged_kv_indices: 每个 (batch, beam) 对应一个 block_id
           cache.paged_kv_indices_expanded = torch::arange(
@@ -215,6 +225,7 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> XAttentionImpl::forward(
 
       // Step 3: Create temporary AttentionMetadata with q_cu_seq_lens_shared
       AttentionMetadata shared_attn_meta = attn_metadata;
+      VLOG(100) << "start update plan info for shared stage";
       shared_attn_meta.q_cu_seq_lens = cache.q_cu_seq_lens_shared;
 
       if (attn_metadata.enable_cuda_graph) {
@@ -258,6 +269,17 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> XAttentionImpl::forward(
           attn_metadata.int_workspace_buffer;
       shared_attention_params.page_locked_int_workspace_buffer =
           attn_metadata.page_locked_int_workspace_buffer;
+      // Slice shared_k_cache and shared_v_cache to match actual kv length
+      // fa3 builds plan_info based on tensor shape, so we need to slice to
+      // match kv_cu_seq_lens
+      //   int64_t actual_kv_len =
+      //       shared_attn_meta.kv_cu_seq_lens[-1].item<int64_t>();
+      //   torch::Tensor shared_k_cache_slice =
+      //       shared_k_cache.slice(0, 0, actual_kv_len);
+      //   torch::Tensor shared_v_cache_slice =
+      //       shared_v_cache.slice(0, 0, actual_kv_len);
+      //   shared_attention_params.key = shared_k_cache_slice;
+      //   shared_attention_params.value = shared_v_cache_slice;
       shared_attention_params.key = shared_k_cache;
       shared_attention_params.value = shared_v_cache;
 
@@ -272,6 +294,7 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> XAttentionImpl::forward(
       int64_t actual_head_dim_qk = query.size(-1);
       int64_t actual_head_dim_vo = attn_metadata.unshared_v_cache.size(-1);
       AttentionMetadata unshared_attn_meta = attn_metadata;
+      VLOG(100) << "start update plan info for unshared stage";
       unshared_attn_meta.plan_info = attn_metadata.unshared_plan_info;
       unshared_attn_meta.paged_kv_indices = cache.paged_kv_indices_expanded;
       unshared_attn_meta.paged_kv_indptr = cache.paged_kv_indptr_expanded;
@@ -320,12 +343,24 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> XAttentionImpl::forward(
       unshared_attention_params.output_lse = cache.unshared_lse;
       unshared_attention_params.window_size_left = sliding_window_;
       unshared_attention_params.scale = scale_;
-      unshared_attention_params.float_workspace_buffer =
-          unshared_attn_meta.float_workspace_buffer;
-      unshared_attention_params.int_workspace_buffer =
-          unshared_attn_meta.int_workspace_buffer;
-      unshared_attention_params.page_locked_int_workspace_buffer =
-          unshared_attn_meta.page_locked_int_workspace_buffer;
+      // Use independent workspace buffer for unshared stage in CUDA graph mode
+      // to avoid conflict with shared stage plan_info
+      if (attn_metadata.enable_cuda_graph &&
+          cache.unshared_float_workspace_buffer.defined()) {
+        unshared_attention_params.float_workspace_buffer =
+            cache.unshared_float_workspace_buffer;
+        unshared_attention_params.int_workspace_buffer =
+            cache.unshared_int_workspace_buffer;
+        unshared_attention_params.page_locked_int_workspace_buffer =
+            cache.unshared_page_locked_int_workspace_buffer;
+      } else {
+        unshared_attention_params.float_workspace_buffer =
+            unshared_attn_meta.float_workspace_buffer;
+        unshared_attention_params.int_workspace_buffer =
+            unshared_attn_meta.int_workspace_buffer;
+        unshared_attention_params.page_locked_int_workspace_buffer =
+            unshared_attn_meta.page_locked_int_workspace_buffer;
+      }
       unshared_attention_params.k_cache = unshared_k;
       unshared_attention_params.v_cache = unshared_v;
 

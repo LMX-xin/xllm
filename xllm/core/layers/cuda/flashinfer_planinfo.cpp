@@ -41,6 +41,7 @@ void update_plan_info(std::shared_ptr<PlanInfo> plan_info,
                       bool use_tensor_core) {
   CHECK(plan_info->layer_id != -1) << "Need to set layer_id to PlanInfo.";
   if (plan_info->layer_id != 0) return;
+  VLOG(100) << "backend: " << backend;
 
   VLOG(kGraphExecutorLogVerboseLevel)
       << "update_plan_info: layer_id=" << plan_info->layer_id
@@ -67,6 +68,16 @@ void update_plan_info(std::shared_ptr<PlanInfo> plan_info,
         kv_cu_seq_lens_host.slice(0, 1) - kv_cu_seq_lens_host.slice(0, 0, -1);
     const int64_t total_num_rows = qo_indptr_host[-1].item<int64_t>();
     const int64_t batch_size = qo_indptr_host.size(0) - 1;
+    VLOG(100) << "total_num_rows: " << total_num_rows;
+    VLOG(100) << "batch_size: " << batch_size;
+    VLOG(100) << "qo_indptr_host: " << qo_indptr_host;
+    VLOG(100) << "kv_cu_seq_lens_host: " << kv_cu_seq_lens_host;
+    VLOG(100) << "kv_len_arr_host: " << kv_len_arr_host;
+    VLOG(100) << "enable_cuda_graph: " << enable_cuda_graph;
+    VLOG(100) << "head_dim_qk: " << head_dim_qk;
+    VLOG(100) << "head_dim_vo: " << head_dim_vo;
+    VLOG(100) << "num_qo_heads: " << num_qo_heads;
+    VLOG(100) << "num_kv_heads: " << num_kv_heads;
     auto call_plan_func = [&](auto&& func) {
       return func.call(attn_meta.float_workspace_buffer,
                        attn_meta.int_workspace_buffer,
@@ -93,6 +104,7 @@ void update_plan_info(std::shared_ptr<PlanInfo> plan_info,
           kernel::cuda::FunctionFactory::get_instance().fa3_prefill_plan_func(
               plan_info->uri));
     }
+    VLOG(100) << "plan_info: " << plan_info->plan_info;
   } else {
     // 2. decode plan info
     if (use_tensor_core) {
