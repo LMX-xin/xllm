@@ -58,14 +58,12 @@ CudaGraphPersistentParam::CudaGraphPersistentParam(
                                   : args_.max_position_embeddings();
 
   // Create persistent tensors with max_tokens_per_batch as first dimension
-  persistent_tokens_ = torch::zeros({max_tokens_per_batch * FLAGS_beam_width},
+  persistent_tokens_ = torch::zeros({max_tokens_per_batch},
                                     torch::dtype(torch::kInt).device(device));
-  persistent_positions_ =
-      torch::zeros({max_tokens_per_batch * FLAGS_beam_width},
-                   torch::dtype(torch::kInt).device(device));
-  persistent_new_cache_slots_ =
-      torch::zeros({max_tokens_per_batch * FLAGS_beam_width},
-                   torch::dtype(torch::kInt).device(device));
+  persistent_positions_ = torch::zeros(
+      {max_tokens_per_batch}, torch::dtype(torch::kInt).device(device));
+  persistent_new_cache_slots_ = torch::zeros(
+      {max_tokens_per_batch}, torch::dtype(torch::kInt).device(device));
 
   // q_seq_lens is q_cu_seq_lens in GPU Model.
   // kv_seq_lens is kv_cu_seq_lens in GPU Model.
@@ -90,9 +88,8 @@ CudaGraphPersistentParam::CudaGraphPersistentParam(
            "dtype: float32. This should not happen in production but for test.";
     dtype = torch::kFloat32;
   }
-  hidden_states_ = torch::zeros(
-      {max_tokens_per_batch * FLAGS_beam_width, args.hidden_size()},
-      torch::dtype(dtype).device(device));
+  hidden_states_ = torch::zeros({max_tokens_per_batch, args.hidden_size()},
+                                torch::dtype(dtype).device(device));
 
   // FlashInfer decode mode parameters
   // paged_kv_indptr: shape [max_seqs_per_batch + 1]
@@ -121,7 +118,7 @@ CudaGraphPersistentParam::CudaGraphPersistentParam(
 
   // Pre-allocate two-stage decode cache tensors (stable pointers for CUDA
   // graph)
-  const int64_t max_total_beam = max_tokens_per_batch * FLAGS_beam_width;
+  const int64_t max_total_beam = FLAGS_max_seqs_per_batch * FLAGS_beam_width;
   const int64_t n_heads = args_.n_heads();
   const int64_t head_dim = args_.head_dim();
   auto fp32_options =
@@ -148,7 +145,7 @@ CudaGraphPersistentParam::CudaGraphPersistentParam(
   persistent_two_decode_cache_.paged_kv_indptr_expanded =
       torch::zeros({max_total_beam + 1}, int32_options);
   persistent_two_decode_cache_.paged_kv_indices_expanded =
-      torch::zeros({max_total_beam}, int32_options);
+      torch::zeros({max_total_beam * FLAGS_max_decode_rounds}, int32_options);
   persistent_two_decode_cache_.paged_kv_last_page_len_expanded =
       torch::zeros({max_total_beam}, int32_options);
 
