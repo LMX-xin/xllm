@@ -30,6 +30,24 @@ class XAttentionImpl : public AttentionImpl {
       torch::Tensor& value,
       KVCache& kv_cache,
       std::optional<torch::Tensor> output = std::nullopt) override;
+
+ private:
+  // Two stage decode: shared stage + unshared stage
+  void forward_two_stage_decode(const AttentionMetadata& attn_metadata,
+                                torch::Tensor& query,
+                                torch::Tensor& key,
+                                torch::Tensor& value,
+                                torch::Tensor& output_tensor,
+                                uint32_t batch_size,
+                                uint32_t beam_size,
+                                uint32_t total_beam);
+
+  // One stage decode: single decode pass
+  void forward_one_stage_decode(const AttentionMetadata& attn_metadata,
+                                torch::Tensor& query,
+                                torch::Tensor& key,
+                                torch::Tensor& value,
+                                torch::Tensor& output_tensor);
 };
 TORCH_MODULE(XAttention);
 
