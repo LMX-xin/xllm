@@ -335,8 +335,6 @@ struct ModelInputParams {
     // rec_params device conversion for both OneRec and LLM-Rec variants
     if (const auto* onerec = onerec_params()) {
       params.rec_params = onerec->to(device);
-    } else if (const auto* llmrec = llmrec_params()) {
-      params.rec_params = llmrec->to(device);
     }
 
     return params;
