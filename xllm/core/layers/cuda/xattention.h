@@ -18,7 +18,6 @@ limitations under the License.
 #include <torch/torch.h>
 
 #include <tuple>
-#include <variant>
 
 #include "framework/kv_cache/kv_cache.h"
 #include "layers/common/attention_metadata.h"
@@ -26,32 +25,32 @@ limitations under the License.
 namespace xllm {
 namespace layer {
 
-class FlashInferAttentionImpl;
-class XAttentionImpl;
-
-class AttentionImpl : public torch::nn::Module {
+// XAttentionImpl is now an independent class (not inheriting from
+// AttentionImpl) to avoid infinite recursion. It stores its own copy of
+// parameters.
+class XAttentionImpl {
  public:
-  AttentionImpl() = default;
-
-  AttentionImpl(int64_t num_heads,
-                int64_t head_size,
-                float scale,
-                int64_t num_kv_heads,
-                int64_t sliding_window);
+  XAttentionImpl(int64_t num_heads,
+                 int64_t head_size,
+                 float scale,
+                 int64_t num_kv_heads,
+                 int64_t sliding_window);
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>> forward(
       const AttentionMetadata& attn_metadata,
       torch::Tensor& query,
       torch::Tensor& key,
       torch::Tensor& value,
+      torch::Tensor& output,
       KVCache& kv_cache);
 
  private:
-  std::variant<std::shared_ptr<FlashInferAttentionImpl>,
-               std::shared_ptr<XAttentionImpl>>
-      attention_impl_;
+  int64_t num_heads_;
+  int64_t head_size_;
+  float scale_;
+  int64_t num_kv_heads_;
+  int64_t sliding_window_;
 };
-TORCH_MODULE(Attention);
 
 }  // namespace layer
 }  // namespace xllm
