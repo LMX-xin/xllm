@@ -108,6 +108,8 @@ std::optional<ForwardOutput> LLMWorkerImpl::step(const ForwardInput& input) {
   if (!model_output.hidden_states.defined()) {
     return std::nullopt;
   }
+  LOG_FIRST_N(INFO, 20) << "[llm-worker] hidden_states: "
+                        << model_output.hidden_states;
 
   torch::Tensor logits;
   if (sampling_params.selected_token_idxes.defined()) {

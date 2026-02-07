@@ -75,6 +75,16 @@ void beam_search(const torch::Tensor& logprobs,
   xllm_ops_utils::create_acltensor(&out_beam_count_prefix_sums_ids,
                                    out_beam_count_prefix_sums);
   xllm_ops_utils::create_acltensor(&out_sequence_ids, out_sequence);
+  LOG(INFO) << "logprobs shape: " << logprobs.sizes();
+  LOG(INFO) << "top_tokens shape: " << top_tokens.sizes();
+  LOG(INFO) << "top_logprobs shape: " << top_logprobs.sizes();
+  LOG(INFO) << "sequence_group shape: " << sequence_group.sizes();
+  LOG(INFO) << "out_token_ids shape: " << out_token_ids.sizes();
+  LOG(INFO) << "out_token_index shape: " << out_token_index.sizes();
+  LOG(INFO) << "out_log_probs shape: " << out_log_probs.sizes();
+  LOG(INFO) << "out_beam_count_prefix_sums shape: "
+            << out_beam_count_prefix_sums.sizes();
+  LOG(INFO) << "out_sequence shape: " << out_sequence.sizes();
   uint64_t workspace_size = 0;
   aclOpExecutor* executor = nullptr;
   CHECK_ACL_SUCCESS(

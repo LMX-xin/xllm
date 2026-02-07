@@ -14,8 +14,8 @@ from setuptools.command.build_ext import build_ext
 from env import get_cxx_abi, set_npu_envs, set_mlu_envs, set_cuda_envs, set_ilu_envs, set_musa_envs
 from utils import get_cpu_arch, get_device_type, pre_build, get_version, check_and_install_pre_commit, read_readme, get_cmake_dir, get_base_dir, get_python_version, get_torch_version
 
-BUILD_TEST_FILE = True
-BUILD_EXPORT = True
+BUILD_TEST_FILE = False
+BUILD_EXPORT = False
         
 class CMakeExtension(Extension):
     def __init__(self, name: str, path: str, sourcedir: str = "") -> None:

@@ -19,6 +19,7 @@ limitations under the License.
 #include <mstx/ms_tools_ext.h>
 
 #include <map>
+#include <sstream>
 
 #include "common/global_flags.h"
 
@@ -28,6 +29,26 @@ limitations under the License.
 
 namespace xllm {
 namespace layer {
+namespace {
+
+std::string TensorSummary(const torch::Tensor& tensor, bool with_minmax) {
+  if (!tensor.defined()) {
+    return "undefined";
+  }
+  std::ostringstream oss;
+  oss << "shape=" << tensor.sizes() << " dtype=" << tensor.dtype()
+      << " device=" << tensor.device() << " numel=" << tensor.numel();
+  if (tensor.is_floating_point()) {
+    auto finite = tensor.isfinite().sum().item<int64_t>();
+    oss << " finite=" << finite;
+    if (with_minmax && tensor.numel() > 0) {
+      oss << " min=" << tensor.min() << " max=" << tensor.max();
+    }
+  }
+  return oss.str();
+}
+
+}  // namespace
 
 const uint64_t WEIGHT_COUNT_PER_LAYER = 56;
 
@@ -241,9 +262,31 @@ torch::Tensor NpuQwen3DecoderLayerImpl::forward(torch::Tensor& x,
                                                 int node_id) {
   atb::Status st;
   // decide prefill vs decode; for multi-round mode, use explicit is_prefill.
-  bool is_prefill = (FLAGS_max_decode_rounds > 0)
-                        ? input_params.is_prefill
-                        : !input_params.batch_forward_type.is_decode();
+  bool is_prefill = input_params.is_prefill;
+  LOG(INFO) << "[npu-qwen3-input-meta] node_id=" << node_id
+            << " is_prefill=" << is_prefill
+            << " kv_seq_lens=" << input_params.kv_seq_lens
+            << " q_seq_lens=" << input_params.q_seq_lens
+            << " block_tables=" << input_params.block_tables
+            << " beam_width_tensor=" << input_params.beam_width_tensor
+            << " current_round_tensor=" << input_params.current_round_tensor;
+  if (is_prefill && node_id == 0) {
+    LOG(INFO) << "[npu-qwen3-input-x] x="
+              << TensorSummary(x, /*with_minmax=*/true)
+              << " cos_pos=" << TensorSummary(cos_pos, /*with_minmax=*/true)
+              << " sin_pos=" << TensorSummary(sin_pos, /*with_minmax=*/true);
+    auto mask = attn_mask;
+    if (mask.defined()) {
+      auto finite = mask.isfinite();
+      auto finite_count = finite.sum().item<int64_t>();
+      LOG(INFO) << "[npu-qwen3-attn-mask] shape=" << mask.sizes()
+                << " dtype=" << mask.dtype() << " numel=" << mask.numel()
+                << " finite=" << finite_count << " min=" << mask.min()
+                << " max=" << mask.max();
+    } else {
+      LOG(INFO) << "[npu-qwen3-attn-mask] undefined";
+    }
+  }
   if (is_prefill) {
     // if (input_params.empty_kv_cache) {
     // mstxRangeId id = mstxRangeStartA("prefill build variant", nullptr);
@@ -297,10 +340,73 @@ void NpuQwen3DecoderLayerImpl::build_node_variant_pack(
       atb_speed::Utils::AtTensor2Tensor(sin_pos);
   node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 3) =
       atb_speed::Utils::AtTensor2Tensor(attn_mask);
+  torch::Tensor key_cache = kv_cache.get_k_cache();
+  torch::Tensor value_cache = kv_cache.get_v_cache();
+  if (FLAGS_max_decode_rounds > 0 && !is_prefill) {
+    const auto* llmrec = input_params.llmrec_params();
+    if (llmrec != nullptr && node_id >= 0 &&
+        static_cast<size_t>(node_id) < llmrec->unshared_k_caches.size() &&
+        static_cast<size_t>(node_id) < llmrec->unshared_v_caches.size() &&
+        llmrec->unshared_k_caches[node_id].defined() &&
+        llmrec->unshared_v_caches[node_id].defined()) {
+      key_cache = llmrec->unshared_k_caches[node_id];
+      value_cache = llmrec->unshared_v_caches[node_id];
+    }
+  }
+  if (node_id == 0) {
+    std::string shared_k_summary = "missing";
+    std::string shared_v_summary = "missing";
+    if (FLAGS_max_decode_rounds > 0 &&
+        static_cast<size_t>(node_id) < input_params.shared_k_caches.size()) {
+      torch::Tensor shared_k_cache_log = input_params.shared_k_caches[node_id];
+      if (is_prefill && shared_k_cache_log.defined() && x.defined() &&
+          x.dim() >= 1 && shared_k_cache_log.dim() >= 1) {
+        const int64_t n_tokens = x.size(0);
+        if (shared_k_cache_log.size(0) >= n_tokens) {
+          shared_k_cache_log = shared_k_cache_log.narrow(0, 0, n_tokens);
+        }
+      }
+      shared_k_summary = TensorSummary(shared_k_cache_log,
+                                       /*with_minmax=*/false);
+    }
+    if (FLAGS_max_decode_rounds > 0 &&
+        static_cast<size_t>(node_id) < input_params.shared_v_caches.size()) {
+      torch::Tensor shared_v_cache_log = input_params.shared_v_caches[node_id];
+      if (is_prefill && shared_v_cache_log.defined() && x.defined() &&
+          x.dim() >= 1 && shared_v_cache_log.dim() >= 1) {
+        const int64_t n_tokens = x.size(0);
+        if (shared_v_cache_log.size(0) >= n_tokens) {
+          shared_v_cache_log = shared_v_cache_log.narrow(0, 0, n_tokens);
+        }
+      }
+      shared_v_summary = TensorSummary(shared_v_cache_log,
+                                       /*with_minmax=*/false);
+    }
+    LOG(INFO) << "[npu-qwen3-input-tensors] node_id=" << node_id
+              << " is_prefill=" << is_prefill << " key_cache="
+              << TensorSummary(key_cache,
+                               /*with_minmax=*/false)
+              << " value_cache="
+              << TensorSummary(value_cache,
+                               /*with_minmax=*/false)
+              << " shared_k_cache=" << shared_k_summary
+              << " shared_v_cache=" << shared_v_summary << " kv_seq_lens="
+              << TensorSummary(input_params.kv_seq_lens,
+                               /*with_minmax=*/false)
+              << " block_tables="
+              << TensorSummary(input_params.block_tables,
+                               /*with_minmax=*/false)
+              << " beam_width_tensor="
+              << TensorSummary(input_params.beam_width_tensor,
+                               /*with_minmax=*/false)
+              << " current_round_tensor="
+              << TensorSummary(input_params.current_round_tensor,
+                               /*with_minmax=*/false);
+  }
   node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 4) =
-      atb_speed::Utils::AtTensor2Tensor(kv_cache.get_k_cache());
+      atb_speed::Utils::AtTensor2Tensor(key_cache);
   node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 5) =
-      atb_speed::Utils::AtTensor2Tensor(kv_cache.get_v_cache());
+      atb_speed::Utils::AtTensor2Tensor(value_cache);
   node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 6) =
       atb_speed::Utils::AtTensor2Tensor(input_params.kv_seq_lens);
   node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 6).hostData =
@@ -330,12 +436,28 @@ void NpuQwen3DecoderLayerImpl::build_node_variant_pack(
   // multi-round mode. Avoid touching these slots in legacy single-round mode
   // to keep the original ATB graph argument layout.
   if (FLAGS_max_decode_rounds > 0) {
+    // In prefill, ATB treats in_decode_{k,v}_cache as the per-token K/V
+    // produced by QKVLinearSplit (i.e. shape [n_tokens, kv_head, head_dim]).
+    // Our shared caches are preallocated with a larger capacity
+    // ([total_num_tokens, kv_head, head_dim]). Pass a narrow view so the ATB
+    // runtime sees the correct token dimension and avoids reading/writing
+    // beyond the current input token range (can lead to NaNs).
+    torch::Tensor shared_k_cache = input_params.shared_k_caches[node_id];
+    torch::Tensor shared_v_cache = input_params.shared_v_caches[node_id];
+    if (is_prefill && shared_k_cache.defined() && shared_v_cache.defined() &&
+        x.defined() && x.dim() >= 1) {
+      const int64_t n_tokens = x.size(0);
+      if (n_tokens >= 0 && shared_k_cache.dim() >= 1 &&
+          shared_k_cache.size(0) >= n_tokens && shared_v_cache.dim() >= 1 &&
+          shared_v_cache.size(0) >= n_tokens) {
+        shared_k_cache = shared_k_cache.narrow(0, 0, n_tokens);
+        shared_v_cache = shared_v_cache.narrow(0, 0, n_tokens);
+      }
+    }
     node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 11) =
-        atb_speed::Utils::AtTensor2Tensor(
-            input_params.shared_k_caches[node_id]);
+        atb_speed::Utils::AtTensor2Tensor(shared_k_cache);
     node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 12) =
-        atb_speed::Utils::AtTensor2Tensor(
-            input_params.shared_v_caches[node_id]);
+        atb_speed::Utils::AtTensor2Tensor(shared_v_cache);
     node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 13) =
         atb_speed::Utils::AtTensor2Tensor(input_params.beam_width_tensor);
     node.variantPack.inTensors.at(WEIGHT_COUNT_PER_LAYER + 14) =

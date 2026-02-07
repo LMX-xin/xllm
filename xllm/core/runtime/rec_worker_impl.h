@@ -229,6 +229,7 @@ class RecWorkerImpl : public LLMWorkerImpl {
     std::vector<torch::Tensor> cached_full_v_caches_;
     torch::Tensor cached_naive_block_table_;
     torch::Tensor cached_current_round_tensor_;
+    torch::Tensor cached_beam_width_tensor_;
 
     RecWorkerImpl& worker_;
 
