@@ -112,6 +112,19 @@ std::tuple<torch::Tensor, std::optional<torch::Tensor>> XAttentionImpl::forward(
     key = key.contiguous();
     value = value.contiguous();
 
+    CHECK(attn_metadata.paged_kv_indptr.defined())
+        << "paged_kv_indptr should be defined in decode";
+    CHECK(attn_metadata.paged_kv_last_page_len.defined())
+        << "paged_kv_last_page_len should be defined in decode";
+    CHECK_EQ(attn_metadata.paged_kv_indptr.size(0),
+             attn_metadata.paged_kv_last_page_len.size(0) + 1)
+        << "paged_kv_indptr shape must match paged_kv_last_page_len in decode";
+    CHECK(attn_metadata.kv_seq_lens.defined())
+        << "kv_seq_lens should be defined in decode";
+    CHECK_EQ(attn_metadata.kv_seq_lens.size(0),
+             attn_metadata.paged_kv_last_page_len.size(0))
+        << "kv_seq_lens size must match decode sequence count";
+
     xllm::kernel::cuda::decoder_reshape_and_cache(
         key,
         value,

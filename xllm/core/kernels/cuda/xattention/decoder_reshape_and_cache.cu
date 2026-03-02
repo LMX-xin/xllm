@@ -66,6 +66,10 @@ __global__ void decoder_reshape_and_cache_kernel(
 
   // Read step value from tensor
   const int64_t current_step = *step;
+  // Guard invalid decode step to avoid out-of-bounds cache write.
+  if (current_step < 0 || current_step >= max_decode_step) {
+    return;
+  }
 
   // Compute base indices
   // proj_k[seq_idx, kv_head_idx, :]
@@ -126,6 +130,28 @@ void decoder_reshape_and_cache(torch::Tensor proj_k,
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
   torch::Tensor block_table_flat = block_table.select(1, 0).to(torch::kInt32);
+
+  // In non-capture mode, hard-check current decode step on host side to fail
+  // fast before kernel launch.
+  cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
+  C10_CUDA_CHECK(cudaStreamIsCapturing(stream, &capture_status));
+  if (capture_status == cudaStreamCaptureStatusNone) {
+    const int64_t current_step_host =
+        static_cast<int64_t>(step.item<int32_t>());
+    CHECK_GE(current_step_host, 0) << "decoder_reshape_and_cache: invalid step "
+                                   << current_step_host << ", expected >= 0";
+    CHECK_LT(current_step_host, max_decode_step)
+        << "decoder_reshape_and_cache: invalid step " << current_step_host
+        << ", expected < max_decode_step(" << max_decode_step << "). "
+        << "num_seqs=" << num_seqs << ", kv_heads=" << kv_heads
+        << ", head_dim=" << head_dim
+        << ", block_table_shape=" << block_table.sizes();
+    VLOG(1) << "[decoder_reshape_and_cache] step=" << current_step_host
+            << ", num_seqs=" << num_seqs << ", kv_heads=" << kv_heads
+            << ", head_dim=" << head_dim
+            << ", max_decode_step=" << max_decode_step
+            << ", block_table_shape=" << block_table.sizes();
+  }
 
   // Launch kernel: one block per (seq, kv_head), threads along head_dim
   const int64_t total_elements = num_seqs * kv_heads;

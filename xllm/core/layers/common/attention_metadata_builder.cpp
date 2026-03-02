@@ -90,7 +90,23 @@ AttentionMetadata AttentionMetadataBuilder::build(
     // NPU path uses per-sequence lengths (not cumulative), so no diff.
     attn_metadata.kv_seq_lens = params.kv_seq_lens;
 #else
-    attn_metadata.kv_seq_lens = torch::diff(params.kv_seq_lens);  // kv seqlens
+    // LLM-REC multi-round decode expands to batch_size * beam_width sequences.
+    // In that mode, kv_seq_lens used by decode kernels must match paged_kv
+    // metadata (expanded sequence count), not the original base batch
+    // cu-seqlen.
+    const bool can_use_paged_indptr_for_kv_lens =
+        !attn_metadata.is_prefill && params.has_llmrec_params() &&
+        params.paged_kv_indptr.defined() && params.paged_kv_indptr.dim() == 1 &&
+        params.paged_kv_last_page_len.defined() &&
+        params.paged_kv_last_page_len.dim() == 1 &&
+        params.paged_kv_indptr.size(0) ==
+            params.paged_kv_last_page_len.size(0) + 1;
+
+    if (can_use_paged_indptr_for_kv_lens) {
+      attn_metadata.kv_seq_lens = torch::diff(params.paged_kv_indptr);
+    } else {
+      attn_metadata.kv_seq_lens = torch::diff(params.kv_seq_lens);
+    }
 #endif
   }
 

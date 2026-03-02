@@ -22,6 +22,7 @@ limitations under the License.
 #include <map>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <vector>
 
 #include "common/device_monitor.h"
@@ -541,6 +542,44 @@ std::optional<ForwardOutput> RecWorkerImpl::LlmRecMultiRoundPipeline::step(
       if (round == total_rounds - 1) {
         build_final_output(
             logits, sample_output, sampling_params, beam_tensors, output);
+        {
+          std::vector<std::vector<int32_t>> sequences;
+          for (int i = 0; i < batch_size; i++) {
+            for (int j = 0; j < beam_width; j++) {
+              std::vector<int32_t> seq;
+              for (int k = 0; k < beam_tensors.sequence_group.size(2); k++) {
+                seq.push_back(
+                    beam_tensors.sequence_group[i][j][k].item<int32_t>());
+              }
+              sequences.push_back(seq);
+            }
+          }
+          std::string json_filename = "beam_sequences.json";
+          std::ofstream json_file(json_filename);
+          if (json_file.is_open()) {
+            json_file << "{\n  \"sequences\": [\n";
+            for (size_t idx = 0; idx < sequences.size(); idx++) {
+              json_file << "    [";
+              for (size_t k = 0; k < sequences[idx].size(); k++) {
+                if (k > 0) {
+                  json_file << ", ";
+                }
+                json_file << sequences[idx][k];
+              }
+              json_file << "]";
+              if (idx < sequences.size() - 1) {
+                json_file << ",";
+              }
+              json_file << "\n";
+            }
+            json_file << "  ]\n}\n";
+            json_file.close();
+            LOG(INFO) << "Beam sequences saved to: " << json_filename;
+          } else {
+            LOG(WARNING) << "Failed to open file for writing: "
+                         << json_filename;
+          }
+        }
       }
     }
   }
@@ -649,11 +688,83 @@ void RecWorkerImpl::LlmRecMultiRoundPipeline::prepare_input_for_current_round(
 #if defined(USE_NPU)
 // TODO: implement prepare_input_for_current_round for NPU
 #elif defined(USE_CUDA)
+  const auto tensor_shape_or_undef = [](const torch::Tensor& t) -> std::string {
+    if (!t.defined()) {
+      return "undefined";
+    }
+    std::ostringstream os;
+    os << t.sizes();
+    return os.str();
+  };
   input.input_params.paged_kv_indices = results.paged_kv_indices;
   input.input_params.paged_kv_indptr = results.paged_kv_indptr;
   input.input_params.paged_kv_last_page_len = results.paged_kv_last_page_len;
   input.input_params.num_sequences =
       input.input_params.paged_kv_last_page_len.numel();
+
+  const auto& paged_kv_indices = input.input_params.paged_kv_indices;
+  const auto& paged_kv_indptr = input.input_params.paged_kv_indptr;
+  const auto& paged_kv_last_page_len =
+      input.input_params.paged_kv_last_page_len;
+  CHECK(paged_kv_indices.defined()) << "paged_kv_indices must be defined";
+  CHECK(paged_kv_indptr.defined()) << "paged_kv_indptr must be defined";
+  CHECK(paged_kv_last_page_len.defined())
+      << "paged_kv_last_page_len must be defined";
+  CHECK_EQ(paged_kv_indptr.dim(), 1) << "paged_kv_indptr must be 1D";
+  CHECK_EQ(paged_kv_indices.dim(), 1) << "paged_kv_indices must be 1D";
+  CHECK_EQ(paged_kv_indptr.size(0), input.input_params.num_sequences + 1)
+      << "paged_kv_indptr size mismatch, indptr=" << paged_kv_indptr.sizes()
+      << ", num_sequences=" << input.input_params.num_sequences;
+
+  const auto paged_kv_indptr_cpu = paged_kv_indptr.to(torch::kCPU);
+  const int64_t indptr_begin = paged_kv_indptr_cpu[0].item<int64_t>();
+  const int64_t indptr_end = paged_kv_indptr_cpu[-1].item<int64_t>();
+  CHECK_EQ(indptr_begin, 0) << "paged_kv_indptr[0] must be 0";
+  CHECK_EQ(indptr_end, paged_kv_indices.numel())
+      << "paged_kv_indptr[-1] must equal paged_kv_indices.numel(), indptr_end="
+      << indptr_end << ", indices_numel=" << paged_kv_indices.numel();
+
+  int64_t indices_min = 0;
+  int64_t indices_max = -1;
+  if (paged_kv_indices.numel() > 0) {
+    indices_min = paged_kv_indices.min().item<int64_t>();
+    indices_max = paged_kv_indices.max().item<int64_t>();
+    CHECK_GE(indices_min, 0) << "paged_kv_indices has negative value";
+    if (!cached_full_k_caches_.empty() && cached_full_k_caches_[0].defined()) {
+      const int64_t full_kv_capacity = cached_full_k_caches_[0].size(0);
+      CHECK_LT(indices_max, full_kv_capacity)
+          << "paged_kv_indices out of full_k_cache range, max_idx="
+          << indices_max << ", full_kv_capacity=" << full_kv_capacity;
+    }
+  }
+
+  if (input.input_params.block_tables.defined() &&
+      input.input_params.block_tables.dim() == 2 &&
+      input.input_params.block_tables.size(0) > 0 &&
+      input.input_params.block_tables.size(1) > 0) {
+    const auto block_table_flat = input.input_params.block_tables.select(1, 0);
+    const int64_t block_table_min = block_table_flat.min().item<int64_t>();
+    const int64_t block_table_max = block_table_flat.max().item<int64_t>();
+    CHECK_GE(block_table_min, 0) << "block_table has negative id";
+    CHECK_LT(block_table_max, input.input_params.num_sequences)
+        << "block_table out of range, max block_id=" << block_table_max
+        << ", num_sequences=" << input.input_params.num_sequences;
+    VLOG(1) << "[rec-round] block_table.min=" << block_table_min
+            << ", block_table.max=" << block_table_max
+            << ", num_sequences=" << input.input_params.num_sequences;
+  }
+
+  VLOG(1) << "[rec-round] prepare_input_for_current_round round=" << round
+          << ", paged_kv_indices.shape="
+          << tensor_shape_or_undef(input.input_params.paged_kv_indices)
+          << ", paged_kv_indptr.shape="
+          << tensor_shape_or_undef(input.input_params.paged_kv_indptr)
+          << ", paged_kv_last_page_len.shape="
+          << tensor_shape_or_undef(input.input_params.paged_kv_last_page_len)
+          << ", num_sequences=" << input.input_params.num_sequences
+          << ", paged_kv_indices.min=" << indices_min
+          << ", paged_kv_indices.max=" << indices_max
+          << ", paged_kv_indptr_end=" << indptr_end;
 #endif
   // previous_step corresponds to the decode step that produced tokens for
   // this round.
@@ -681,6 +792,10 @@ void RecWorkerImpl::LlmRecMultiRoundPipeline::prepare_input_for_current_round(
   input.input_params.input_embedding = torch::Tensor();
   cached_current_round_tensor_.fill_(previous_step);
   llm_rec_params.current_round_tensor = cached_current_round_tensor_;
+  VLOG(1) << "[rec-round] prepare_input_for_current_round round=" << round
+          << ", previous_step=" << previous_step
+          << ", token_ids.shape=" << input.token_ids.sizes()
+          << ", positions.shape=" << input.positions.sizes();
   input.input_params.attn_metadata = nullptr;
 }
 
@@ -724,16 +839,19 @@ RecWorkerImpl::LlmRecMultiRoundPipeline::compute_next_round_input_async(
       lock_guard.emplace(replay_lock);
     }
     c10::StreamGuard streamGuard = worker_.prepare_stream_->set_stream_guard();
+    auto active_full_kv_offsets = full_kv_offsets.slice(0, 0, batch_size);
+    auto active_full_kv_mask = full_kv_mask.slice(0, 0, batch_size);
+    auto active_full_kv_indices = full_kv_indices.slice(0, 0, batch_size);
+
     auto shared_kv_offsets =
-        full_kv_offsets.slice(2, 0, max_token_per_req_).slice(0, 0, batch_size);
+        active_full_kv_offsets.slice(2, 0, max_token_per_req_);
 
     auto shared_kv_lens_each_batch = torch::diff(kv_seq_lens);
 
     auto shared_kv_lens_each_batch_broadcast =
         shared_kv_lens_each_batch.unsqueeze(1).unsqueeze(1);
 
-    auto shared_mask =
-        full_kv_mask.slice(2, 0, max_token_per_req_).slice(0, 0, batch_size);
+    auto shared_mask = active_full_kv_mask.slice(2, 0, max_token_per_req_);
 
     shared_mask.copy_(shared_kv_offsets < shared_kv_lens_each_batch_broadcast);
 
@@ -743,23 +861,19 @@ RecWorkerImpl::LlmRecMultiRoundPipeline::compute_next_round_input_async(
         kv_lens_batch_offsets.unsqueeze(1).unsqueeze(1);
 
     auto shared_kv_indices =
-        full_kv_indices.slice(2, 0, max_token_per_req_).slice(0, 0, batch_size);
+        active_full_kv_indices.slice(2, 0, max_token_per_req_);
 
     shared_kv_indices.copy_(kv_lens_batch_offsets_broadcast +
                             shared_kv_offsets);
 
     auto unshared_kv_offsets = unshared_full_kv_offsets.slice(0, 0, batch_size);
     int32_t unshared_kv_len = beam_width * max_decode_step;
-    auto unshared_kv_indices =
-        full_kv_indices
-            .slice(2, max_token_per_req_, max_token_per_req_ + unshared_kv_len)
-            .slice(0, 0, batch_size);
+    auto unshared_kv_indices = active_full_kv_indices.slice(
+        2, max_token_per_req_, max_token_per_req_ + unshared_kv_len);
     unshared_kv_indices.copy_(unshared_kv_offsets + unshared_kv_begin_offset);
 
-    auto unshared_mask =
-        full_kv_mask
-            .slice(2, max_token_per_req_, max_token_per_req_ + unshared_kv_len)
-            .slice(0, 0, batch_size);
+    auto unshared_mask = active_full_kv_mask.slice(
+        2, max_token_per_req_, max_token_per_req_ + unshared_kv_len);
     auto real_max_decode_step_ids_slice =
         real_max_decode_step_ids.slice(0, 0, batch_size);
     unshared_mask.copy_(real_max_decode_step_ids_slice <= current_step);
@@ -774,10 +888,17 @@ RecWorkerImpl::LlmRecMultiRoundPipeline::compute_next_round_input_async(
     auto paged_kv_indptr = torch::cat({torch::zeros({1}, int32_device_options),
                                        cumsum_result.to(int32_device_options)},
                                       0);
-    auto paged_kv_indices = full_kv_indices.masked_select(full_kv_mask);
+    auto paged_kv_indices =
+        active_full_kv_indices.masked_select(active_full_kv_mask);
     auto paged_kv_last_page_len =
         torch::ones({batch_size * beam_width}, int32_device_options);
     worker_.prepare_stream_->synchronize();
+    const int64_t indptr_end = paged_kv_indptr[-1].item<int64_t>();
+    CHECK_EQ(indptr_end, paged_kv_indices.numel())
+        << "async build mismatch, step=" << current_step
+        << ", batch_size=" << batch_size << ", beam_width=" << beam_width
+        << ", indptr_end=" << indptr_end
+        << ", indices_numel=" << paged_kv_indices.numel();
 
     NextRoundInputResults results;
     results.paged_kv_indices = paged_kv_indices;
