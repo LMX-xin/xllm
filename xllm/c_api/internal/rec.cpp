@@ -58,26 +58,54 @@ void reset_pipeline_runtime_toggles() {
 }
 
 void apply_multi_round_pipeline_toggles() {
+  FLAGS_enable_prefix_cache = false;
+  FLAGS_enable_chunked_prefill = false;
+  FLAGS_enable_xattention_one_stage = false;
+  // GPU and NPU share the same RecMultiRoundEnginePipeline, but they require
+  // different runtime toggles in the REC C API path.
+#if defined(USE_CUDA)
+  FLAGS_enable_graph = true;
+  FLAGS_rec_worker_max_concurrency = 2;
+  FLAGS_enable_schedule_overlap = false;
   FLAGS_enable_rec_fast_sampler = true;
   FLAGS_enable_prefill_piecewise_graph = true;
-  FLAGS_enable_xattention_one_stage = false;
   FLAGS_enable_graph_mode_decode_no_padding = true;
   FLAGS_enable_topk_sorted = false;
+#elif defined(USE_NPU)
+  FLAGS_enable_graph = false;
+  FLAGS_rec_worker_max_concurrency = 1;
+  FLAGS_enable_rec_fast_sampler = false;
+  FLAGS_enable_prefill_piecewise_graph = false;
+  FLAGS_enable_graph_mode_decode_no_padding = false;
+  FLAGS_enable_topk_sorted = false;
+#else
+  FLAGS_enable_graph = false;
+  FLAGS_rec_worker_max_concurrency = 1;
+  FLAGS_enable_rec_fast_sampler = false;
+  FLAGS_enable_prefill_piecewise_graph = false;
+  FLAGS_enable_graph_mode_decode_no_padding = false;
+  FLAGS_enable_topk_sorted = false;
+#endif
 }
 
-void apply_onerec_pipeline_toggles(xllm::Options* options) {
+void apply_onerec_pipeline_toggles() {
   FLAGS_enable_rec_prefill_only = true;
   FLAGS_enable_constrained_decoding = true;
   FLAGS_enable_prefix_cache = false;
   FLAGS_enable_schedule_overlap = false;
   FLAGS_enable_chunked_prefill = false;
 
-  options->enable_prefix_cache(false)
-      .enable_schedule_overlap(false)
-      .enable_chunked_prefill(false);
-
   // OneRec does not use Rec multi-round decode rounds.
   FLAGS_max_decode_rounds = 0;
+}
+
+void sync_pipeline_runtime_toggles_to_options(xllm::Options* options) {
+  options->enable_graph(FLAGS_enable_graph)
+      .enable_prefix_cache(FLAGS_enable_prefix_cache)
+      .enable_schedule_overlap(FLAGS_enable_schedule_overlap)
+      .enable_chunked_prefill(FLAGS_enable_chunked_prefill)
+      .beam_width(FLAGS_beam_width)
+      .rec_worker_max_concurrency(FLAGS_rec_worker_max_concurrency);
 }
 
 }  // namespace
@@ -204,9 +232,8 @@ XLLM_CAPI_EXPORT bool xllm_rec_initialize(
     const xllm::RecPipelineType pipeline_type =
         xllm::get_rec_pipeline_type(rec_model_kind);
 
-    // Hard-coded REC so settings. enable_graph and rec_worker_max_concurrency
-    // are dual-source: runtime may read FLAGS_* while setup also needs the same
-    // value in Options.
+    // Baseline REC C API settings. These dual-source fields may be overridden
+    // by pipeline-specific runtime toggles below.
     FLAGS_enable_graph = true;
     FLAGS_rec_worker_max_concurrency = 2;
 
@@ -217,7 +244,7 @@ XLLM_CAPI_EXPORT bool xllm_rec_initialize(
         apply_multi_round_pipeline_toggles();
         break;
       case xllm::RecPipelineType::kOneRecDefault:
-        apply_onerec_pipeline_toggles(&options);
+        apply_onerec_pipeline_toggles();
         break;
       case xllm::RecPipelineType::kLlmRecDefault:
       case xllm::RecPipelineType::kLlmRecWithMmData:
@@ -229,13 +256,16 @@ XLLM_CAPI_EXPORT bool xllm_rec_initialize(
     }
 
     // Keep dual-source settings aligned with the FLAGS_* values above.
-    options.enable_graph(FLAGS_enable_graph)
-        .beam_width(FLAGS_beam_width)
-        .rec_worker_max_concurrency(FLAGS_rec_worker_max_concurrency);
+    sync_pipeline_runtime_toggles_to_options(&options);
 
     LOG(INFO) << "REC C API selected pipeline="
               << get_rec_pipeline_name(pipeline_type)
               << ", model_type=" << model_args.model_type()
+              << ", enable_graph=" << FLAGS_enable_graph
+              << ", rec_worker_max_concurrency="
+              << FLAGS_rec_worker_max_concurrency
+              << ", enable_prefill_piecewise_graph="
+              << FLAGS_enable_prefill_piecewise_graph
               << ", enable_rec_prefill_only=" << FLAGS_enable_rec_prefill_only
               << ", enable_constrained_decoding="
               << FLAGS_enable_constrained_decoding
