@@ -130,6 +130,8 @@ XLLM_CAPI_EXPORT bool xllm_rec_initialize(
     FLAGS_max_tokens_per_batch = xllm_init_options.max_tokens_per_batch;
     FLAGS_block_size = xllm_init_options.block_size;
 
+    FLAGS_enable_chunked_prefill = xllm_init_options.enable_chunked_prefill;
+    FLAGS_enable_prefix_cache = xllm_init_options.enable_prefix_cache;
     FLAGS_enable_graph = xllm_init_options.enable_graph;
     FLAGS_rec_worker_max_concurrency =
         xllm_init_options.rec_worker_max_concurrency;
