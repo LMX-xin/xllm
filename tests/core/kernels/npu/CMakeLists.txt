@@ -17,3 +17,4 @@ include(cc_test)
 # )
 
 add_subdirectory(tilelang)
+add_subdirectory(megakernel)

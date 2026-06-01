@@ -57,3 +57,35 @@ target_link_options(npu_linear_w8a8_dynamic_test PRIVATE
   "-Wl,--whole-archive"
   "${CMAKE_BINARY_DIR}/third_party/spdlog/libspdlog.a"
   "-Wl,--no-whole-archive")
+
+cc_test(
+  NAME
+    npu_fused_moe_megakernel_test
+  SRCS
+    fused_moe_megakernel_test.cpp
+    tests_utils.cpp
+  DEPS
+    :npu_torch_layers
+    :npu_kernels
+    :common_layers
+    :parallel_state
+    :model
+    :state_dict
+    :xllm_ops
+    glog::glog
+    torch
+    GTest::gtest_main
+)
+
+target_link_libraries(npu_fused_moe_megakernel_test
+                      PRIVATE
+                      ascendcl
+                      hccl
+                      c_sec
+                      nnopbase
+                      atb)
+
+target_link_options(npu_fused_moe_megakernel_test PRIVATE
+  "-Wl,--whole-archive"
+  "${CMAKE_BINARY_DIR}/third_party/spdlog/libspdlog.a"
+  "-Wl,--no-whole-archive")

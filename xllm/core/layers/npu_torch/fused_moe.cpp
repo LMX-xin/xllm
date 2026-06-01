@@ -20,7 +20,10 @@ limitations under the License.
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <numeric>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -34,6 +37,8 @@ limitations under the License.
 #include "common/global_flags.h"
 #include "framework/config/kernel_config.h"
 #include "framework/parallel_state/parallel_state.h"
+#include "kernels/npu/megakernel/dense_ffn_runner.h"
+#include "kernels/npu/megakernel/moe_single_expert_adapter.h"
 #include "kernels/ops_api.h"
 #include "layers/common/dp_utils.h"
 #include "platform/device.h"
@@ -43,6 +48,45 @@ namespace xllm {
 namespace layer {
 
 namespace {
+
+constexpr const char* kForceSingleExpertMoeIdEnv =
+    "XLLM_FORCE_SINGLE_EXPERT_MOE_ID";
+constexpr const char* kMegakernelDebugLogEnv = "XLLM_MEGAKERNEL_DEBUG_LOG";
+
+bool parse_bool_env(const char* name) {
+  const char* value = std::getenv(name);
+  if (value == nullptr) {
+    return false;
+  }
+  std::string normalized(value);
+  std::transform(
+      normalized.begin(),
+      normalized.end(),
+      normalized.begin(),
+      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return normalized == "1" || normalized == "true" || normalized == "on" ||
+         normalized == "yes";
+}
+
+std::optional<int64_t> forced_single_expert_id_from_env() {
+  const char* value = std::getenv(kForceSingleExpertMoeIdEnv);
+  if (value == nullptr || *value == '\0') {
+    return std::nullopt;
+  }
+
+  char* end = nullptr;
+  const long long parsed = std::strtoll(value, &end, 10);
+  if (end == value || *end != '\0' || parsed < 0) {
+    LOG(WARNING) << "Ignoring invalid " << kForceSingleExpertMoeIdEnv << "="
+                 << value;
+    return std::nullopt;
+  }
+  return static_cast<int64_t>(parsed);
+}
+
+bool megakernel_debug_log_enabled() {
+  return parse_bool_env(kMegakernelDebugLogEnv);
+}
 
 // Generic local tensor helpers.
 torch::Tensor get_tensor_with_weight_suffix(const StateDict& state_dict,
@@ -184,6 +228,25 @@ bool has_w_style_shared_expert_weights(const StateDict& state_dict) {
     }
   }
   return false;
+}
+
+bool tensor_to_int64_vector(const torch::Tensor& tensor,
+                            std::vector<int64_t>* values) {
+  if (values == nullptr || !tensor.defined() || tensor.numel() < 0) {
+    return false;
+  }
+
+  torch::Tensor cpu_tensor =
+      tensor.to(torch::TensorOptions().device(torch::kCPU).dtype(torch::kLong))
+          .contiguous();
+  const int64_t element_count = cpu_tensor.numel();
+  values->resize(static_cast<size_t>(element_count));
+  if (element_count > 0) {
+    std::memcpy(values->data(),
+                cpu_tensor.data_ptr<int64_t>(),
+                static_cast<size_t>(element_count) * sizeof(int64_t));
+  }
+  return true;
 }
 
 // Qwen3.5-MoE fused checkpoint fallback helpers.
@@ -720,7 +783,33 @@ torch::Tensor FusedMoEImpl::select_experts(
   if (e_score_correction_bias_.defined()) {
     e_score_correction_bias = e_score_correction_bias_;
   }
-  if (preselected_experts_.has_value()) {
+  const int64_t local_expert_start = start_expert_id_;
+  const int64_t local_expert_end = start_expert_id_ + num_experts_per_rank_;
+  if (auto forced_expert_id = forced_single_expert_id_from_env();
+      forced_expert_id.has_value()) {
+    CHECK_GT(topk_, 0) << "topk must be positive for forced single expert.";
+    CHECK_GE(forced_expert_id.value(), local_expert_start)
+        << kForceSingleExpertMoeIdEnv
+        << " must select a local expert for this rank, got "
+        << forced_expert_id.value() << ", local range [" << local_expert_start
+        << ", " << local_expert_end << ")";
+    CHECK_LT(forced_expert_id.value(), local_expert_end)
+        << kForceSingleExpertMoeIdEnv
+        << " must select a local expert for this rank, got "
+        << forced_expert_id.value() << ", local range [" << local_expert_start
+        << ", " << local_expert_end << ")";
+    topk_ids = torch::full({hidden_states_2d.size(0), topk_},
+                           forced_expert_id.value(),
+                           hidden_states_2d.options().dtype(torch::kInt32));
+    topk_weights = torch::full({hidden_states_2d.size(0), topk_},
+                               1.0 / static_cast<double>(topk_),
+                               hidden_states_2d.options());
+    if (megakernel_debug_log_enabled()) {
+      LOG(INFO) << "Forced Qwen3 MoE routing to expert "
+                << forced_expert_id.value() << " for "
+                << hidden_states_2d.size(0) << " tokens and topk=" << topk_;
+    }
+  } else if (preselected_experts_.has_value()) {
     const auto& selected = preselected_experts_.value();
     topk_weights = selected.first.reshape({-1, topk_});
     topk_ids = selected.second.reshape({-1, topk_}).to(torch::kInt32);
@@ -773,8 +862,6 @@ torch::Tensor FusedMoEImpl::select_experts(
     }
   }
 
-  const int64_t local_expert_start = start_expert_id_;
-  const int64_t local_expert_end = start_expert_id_ + num_experts_per_rank_;
   if (parallel_args_.ep_size() > 1) {
     // The routing op uses global expert ids, but this rank only contributes
     // outputs for its active expert range.
@@ -1002,49 +1089,94 @@ torch::Tensor FusedMoEImpl::forward_expert(
       gemm2_out = xllm::kernel::group_gemm(group_gemm_params);
     }
   } else {
-    // Step 4: group gemm 1
-    {
-      xllm::kernel::GroupGemmParams group_gemm_params;
-      group_gemm_params.a = expand_hidden_states;
-      ensure_group_gemm_weight_layout(w13_,
-                                      w13_group_gemm_layout_prepared_,
-                                      expand_hidden_states.size(1),
-                                      local_intermediate_size_ * 2,
-                                      "w13");
-      group_gemm_params.b = w13_;
-      group_gemm_params.group_list = selected_expert_info.token_count_slice;
-      group_gemm_params.split_item = 2;
-      group_gemm_params.group_type = 0;
-      group_gemm_params.group_list_type = 1;
-      gemm1_out = xllm::kernel::group_gemm(group_gemm_params);
+    ensure_group_gemm_weight_layout(w13_,
+                                    w13_group_gemm_layout_prepared_,
+                                    expand_hidden_states.size(1),
+                                    local_intermediate_size_ * 2,
+                                    "w13");
+    ensure_group_gemm_weight_layout(w2_,
+                                    w2_group_gemm_layout_prepared_,
+                                    local_intermediate_size_,
+                                    hidden_size_,
+                                    "w2");
+
+    bool used_megakernel = false;
+    if (xllm::kernel::npu::megakernel::is_single_expert_moe_enabled() &&
+        hidden_states_dtype == torch::kHalf && is_gated_ &&
+        (hidden_act_ == "silu" || hidden_act_ == "swiglu")) {
+      std::vector<int64_t> group_list;
+      std::vector<uint32_t> expert_token_counts;
+      xllm::kernel::npu::megakernel::SingleActiveExpert active_expert;
+      if (tensor_to_int64_vector(selected_expert_info.token_count_slice,
+                                 &group_list) &&
+          xllm::kernel::npu::megakernel::group_list_to_token_counts(
+              group_list,
+              expand_hidden_states.size(0),
+              num_experts_per_rank_,
+              &expert_token_counts) &&
+          xllm::kernel::npu::megakernel::find_single_active_expert(
+              expert_token_counts, &active_expert)) {
+        torch::Tensor megakernel_out;
+        xllm::kernel::npu::megakernel::DenseFfnRunParams params;
+        params.x = expand_hidden_states.slice(
+            0,
+            active_expert.start_offset,
+            active_expert.start_offset + active_expert.token_count);
+        params.w1 = w13_.select(0, active_expert.expert_id);
+        params.w2 = w2_.select(0, active_expert.expert_id);
+        params.hidden_size = hidden_size_;
+        params.intermediate_size = local_intermediate_size_;
+        used_megakernel =
+            xllm::kernel::npu::megakernel::try_run_dense_ffn_fp16_no_quant(
+                params, &megakernel_out);
+        if (used_megakernel) {
+          if (megakernel_debug_log_enabled()) {
+            LOG(INFO) << "Used megakernel single-expert MoE path, expert_id="
+                      << active_expert.expert_id
+                      << ", token_count=" << active_expert.token_count
+                      << ", hidden_size=" << hidden_size_
+                      << ", intermediate_size=" << local_intermediate_size_;
+          }
+          gemm2_out = megakernel_out;
+        }
+      }
     }
 
-    // Step 5: activation
-    torch::Tensor act_out;
+    if (!used_megakernel) {
+      // Step 4: group gemm 1
+      {
+        xllm::kernel::GroupGemmParams group_gemm_params;
+        group_gemm_params.a = expand_hidden_states;
+        group_gemm_params.b = w13_;
+        group_gemm_params.group_list = selected_expert_info.token_count_slice;
+        group_gemm_params.split_item = 2;
+        group_gemm_params.group_type = 0;
+        group_gemm_params.group_list_type = 1;
+        gemm1_out = xllm::kernel::group_gemm(group_gemm_params);
+      }
 
-    xllm::kernel::ActivationParams activation_params;
-    activation_params.input = gemm1_out;
-    activation_params.output = act_out;
-    activation_params.act_mode = hidden_act_;
-    activation_params.is_gated = is_gated_;
-    xllm::kernel::active(activation_params);
-    act_out = activation_params.output;
+      // Step 5: activation
+      torch::Tensor act_out;
 
-    // Step 6: group gemm 2
-    {
-      xllm::kernel::GroupGemmParams group_gemm_params;
-      group_gemm_params.a = act_out;
-      ensure_group_gemm_weight_layout(w2_,
-                                      w2_group_gemm_layout_prepared_,
-                                      act_out.size(1),
-                                      hidden_size_,
-                                      "w2");
-      group_gemm_params.b = w2_;
-      group_gemm_params.group_list = selected_expert_info.token_count_slice;
-      group_gemm_params.split_item = 2;
-      group_gemm_params.group_type = 0;
-      group_gemm_params.group_list_type = 1;
-      gemm2_out = xllm::kernel::group_gemm(group_gemm_params);
+      xllm::kernel::ActivationParams activation_params;
+      activation_params.input = gemm1_out;
+      activation_params.output = act_out;
+      activation_params.act_mode = hidden_act_;
+      activation_params.is_gated = is_gated_;
+      xllm::kernel::active(activation_params);
+      act_out = activation_params.output;
+
+      // Step 6: group gemm 2
+      {
+        xllm::kernel::GroupGemmParams group_gemm_params;
+        group_gemm_params.a = act_out;
+        group_gemm_params.b = w2_;
+        group_gemm_params.group_list = selected_expert_info.token_count_slice;
+        group_gemm_params.split_item = 2;
+        group_gemm_params.group_type = 0;
+        group_gemm_params.group_list_type = 1;
+        gemm2_out = xllm::kernel::group_gemm(group_gemm_params);
+      }
     }
   }
 

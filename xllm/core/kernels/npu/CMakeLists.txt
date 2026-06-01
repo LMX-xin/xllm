@@ -4,6 +4,24 @@ add_subdirectory(tilelang)
 
 add_subdirectory(xllm_ops)
 
+set(XLLM_MEGAKERNEL_ROOT "$ENV{MEGAKERNEL_ROOT}" CACHE PATH
+    "Path to a megakernel source tree for optional xLLM integration")
+if(NOT XLLM_MEGAKERNEL_ROOT)
+  get_filename_component(_xllm_sibling_megakernel
+    "${PROJECT_SOURCE_DIR}/../megakernel" ABSOLUTE)
+  if(EXISTS "${_xllm_sibling_megakernel}/control/frontend/graph_builder.h")
+    set(XLLM_MEGAKERNEL_ROOT "${_xllm_sibling_megakernel}")
+  endif()
+endif()
+
+set(XLLM_MEGAKERNEL_DEFINES "")
+set(XLLM_MEGAKERNEL_INCLUDES "")
+if(XLLM_MEGAKERNEL_ROOT AND
+   EXISTS "${XLLM_MEGAKERNEL_ROOT}/control/frontend/graph_builder.h")
+  list(APPEND XLLM_MEGAKERNEL_DEFINES XLLM_ENABLE_MEGAKERNEL_COMPILE)
+  list(APPEND XLLM_MEGAKERNEL_INCLUDES "${XLLM_MEGAKERNEL_ROOT}")
+endif()
+
 cc_library(
   NAME
     npu_kernels
@@ -15,6 +33,8 @@ cc_library(
     attention.cpp
     fused_layernorm.cpp
     matmul.cpp
+    megakernel/dense_ffn_runner.cpp
+    megakernel/moe_single_expert_adapter.cpp
     npu_causal_conv1d.cpp
     npu_fused_infer_attention.cpp
     npu_gemma_rms_norm.cpp
@@ -36,4 +56,8 @@ cc_library(
     :tilelang_kernels
     xllm_ops
     opapi
+  DEFINES
+    ${XLLM_MEGAKERNEL_DEFINES}
+  INCLUDES
+    ${XLLM_MEGAKERNEL_INCLUDES}
 )
